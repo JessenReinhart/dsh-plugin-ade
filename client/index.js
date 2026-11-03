@@ -779,12 +779,19 @@ function ADENodeGraphViewWrapper(props) {
     } catch (_) {}
   };
 
+  const renderSlot = typeof props.renderSlot === 'function' ? props.renderSlot : cachedRenderSlot;
+  const SessionProvider = typeof props.SessionProvider === 'function' ? props.SessionProvider : cachedSessionProvider;
+
   return React.createElement(ADENodeGraphCanvas, {
     sessionsSnapshot,
     currentSessionId: sessionId,
     onOpenSession,
     onSplitSession,
     onForkSession,
+    renderSlot,
+    SessionProvider,
+    ensureReference,
+    workspaceOf,
   });
 }
 
@@ -1456,6 +1463,24 @@ function injectMotionStyles() {
       }
       [data-ade-subagent-row]:hover [data-ade-child-split-btn] {
         display: inline-flex !important;
+      }
+      /* Strip native chrome inside expanded node-graph live chat cards.
+         The node card itself provides the header/badges, so the native
+         conversation header, conversation tabs and breadcrumbs are redundant
+         and only consume vertical space inside the small embedded card. */
+      [data-ade-node-chat] header,
+      [data-ade-node-chat] [data-conversation-tabs],
+      [data-ade-node-chat] [data-conversation-header-leading],
+      [data-ade-node-chat] header [role="tablist"],
+      [data-ade-node-chat] header [class*="breadcrumbs"],
+      [data-ade-node-chat] header [class*="crumbs"],
+      [data-ade-node-chat] header [class*="crumbSeg"] {
+        display: none !important;
+      }
+      [data-ade-node-chat] {
+        border-bottom-left-radius: 8px !important;
+        border-bottom-right-radius: 8px !important;
+        overflow: hidden !important;
       }
       @media (prefers-reduced-motion: reduce) {
         [data-ade-split] [data-ade-pane],
