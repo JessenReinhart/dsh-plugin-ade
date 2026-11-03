@@ -13,6 +13,7 @@ import React, { useState, useRef, useMemo, useCallback } from 'react';
 const STORAGE_POSITIONS_KEY = 'dsh-ade-node-positions-v2';
 const CARD_WIDTH_COMPACT = 260;
 const CARD_WIDTH_EXPANDED = 500;
+const CARD_HEIGHT_COMPACT = 110;
 const CARD_HEIGHT_EXPANDED = 560;
 const CARD_HEADER_HEIGHT = 34;
 
@@ -144,7 +145,12 @@ export function extractLineageGraph(snapshot, workspaceResolver) {
     if (Array.isArray(catalog)) {
       for (const entry of catalog) {
         if (!entry || !entry.id) continue;
-        if (!nodesMap.has(entry.id)) {
+        if (nodesMap.has(entry.id)) {
+          const existingNode = nodesMap.get(entry.id);
+          if (entry.running === true) existingNode.running = true;
+          if (!existingNode.isSubagent) existingNode.isSubagent = true;
+          if (!existingNode.parentId) existingNode.parentId = parentId;
+        } else {
           const parentNode = nodesMap.get(parentId);
           const wsId = parentNode ? parentNode.workspaceId : 'default';
           const wsTitle = parentNode ? parentNode.workspaceTitle : 'Default Workspace';
@@ -184,6 +190,10 @@ export function extractLineageGraph(snapshot, workspaceResolver) {
   // 4. Construct edges
   for (const node of nodesMap.values()) {
     if (node.parentId && nodesMap.has(node.parentId) && node.parentId !== node.id) {
+      const parentNode = nodesMap.get(node.parentId);
+      const communicatingWithSubagent = Boolean(
+        node.isSubagent && (node.running || (parentNode && parentNode.running))
+      );
       edges.push({
         id: `${node.parentId}->${node.id}`,
         from: node.parentId,
@@ -191,6 +201,7 @@ export function extractLineageGraph(snapshot, workspaceResolver) {
         isSubagent: node.isSubagent,
         isFork: node.isFork,
         running: node.running,
+        communicatingWithSubagent,
       });
     }
   }
@@ -329,6 +340,7 @@ export function ADENodeGraphCanvas(props) {
   const [transform, setTransform] = useState({ x: 50, y: 50, k: 0.88 });
   const [selectedNodeId, setSelectedNodeId] = useState(currentSessionId || null);
   const [expandedChatNodeIds, setExpandedChatNodeIds] = useState(() => new Set());
+  const [closingChatNodeIds, setClosingChatNodeIds] = useState(() => new Set());
   const [filterMode, setFilterMode] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -383,7 +395,7 @@ export function ADENodeGraphCanvas(props) {
         const pos = positions[node.id] || { x: 120, y: 120 };
         const isExp = expandedChatNodeIds.has(node.id);
         const w = isExp ? CARD_WIDTH_EXPANDED : CARD_WIDTH_COMPACT;
-        const h = isExp ? CARD_HEIGHT_EXPANDED : 130;
+        const h = isExp ? CARD_HEIGHT_EXPANDED : CARD_HEIGHT_COMPACT;
         minX = Math.min(minX, pos.x);
         minY = Math.min(minY, pos.y);
         maxX = Math.max(maxX, pos.x + w);
@@ -407,12 +419,35 @@ export function ADENodeGraphCanvas(props) {
   }, [graphData.workspaces, visibleNodes, positions, expandedChatNodeIds]);
 
   const handleToggleChatExpand = useCallback((nodeId) => {
+    let isClosingNode = false;
     setExpandedChatNodeIds((prev) => {
       const next = new Set(prev);
-      if (next.has(nodeId)) next.delete(nodeId);
-      else next.add(nodeId);
+      if (next.has(nodeId)) {
+        next.delete(nodeId);
+        isClosingNode = true;
+      } else {
+        next.add(nodeId);
+      }
       return next;
     });
+
+    if (isClosingNode) {
+      setClosingChatNodeIds((prev) => new Set(prev).add(nodeId));
+      window.setTimeout(() => {
+        setClosingChatNodeIds((prev) => {
+          const next = new Set(prev);
+          next.delete(nodeId);
+          return next;
+        });
+      }, 300);
+    } else {
+      setClosingChatNodeIds((prev) => {
+        if (!prev.has(nodeId)) return prev;
+        const next = new Set(prev);
+        next.delete(nodeId);
+        return next;
+      });
+    }
   }, []);
 
   const handleRecenter = useCallback(() => {
@@ -425,7 +460,7 @@ export function ADENodeGraphCanvas(props) {
       const pos = positions[node.id] || { x: 120, y: 120 };
       const isExp = expandedChatNodeIds.has(node.id);
       const w = isExp ? CARD_WIDTH_EXPANDED : CARD_WIDTH_COMPACT;
-      const h = isExp ? CARD_HEIGHT_EXPANDED : 130;
+      const h = isExp ? CARD_HEIGHT_EXPANDED : CARD_HEIGHT_COMPACT;
       minX = Math.min(minX, pos.x);
       minY = Math.min(minY, pos.y);
       maxX = Math.max(maxX, pos.x + w);
@@ -948,23 +983,89 @@ export function ADENodeGraphCanvas(props) {
           let strokeColor = 'oklch(0.42 0.04 260)';
           let marker = 'url(#ade-wire-arrow)';
           if (edge.isSubagent) {
-            strokeColor = edge.running ? 'oklch(0.72 0.17 145)' : 'oklch(0.55 0.12 160)';
+            strokeColor = edge.communicating
+              ? 'oklch(0.72 0.17 145)'
+              : edge.running
+              ? 'oklch(0.72 0.17 145)'
+              : 'oklch(0.55 0.12 160)';
             marker = 'url(#ade-wire-arrow-subagent)';
           } else if (edge.isFork) {
             strokeColor = 'oklch(0.6 0.14 300)';
             marker = 'url(#ade-wire-arrow-fork)';
           }
 
-          return React.createElement('path', {
-            key: edge.id,
+          const communicate = Boolean(edge.communicating);
+
+          const wirePath = React.createElement('path', {
             d,
             fill: 'none',
             stroke: strokeColor,
-            strokeWidth: edge.running ? 2.5 : 1.8,
-            strokeDasharray: edge.running ? '6 6' : undefined,
+            strokeWidth: communicate ? 2.5 : edge.running ? 2.5 : 1.8,
+            strokeDasharray: communicate ? '7 7' : edge.running ? '6 6' : undefined,
             markerEnd: marker,
-            style: edge.running ? { animation: 'adeFlowPulse 1.2s linear infinite' } : undefined,
+            'data-ade-wire': '',
+            style: {
+              transition: 'd 280ms cubic-bezier(0.2, 0.9, 0.3, 1)',
+              animation: communicate
+                ? 'adeWireStream 0.55s linear infinite'
+                : edge.running
+                ? 'adeFlowPulse 1.2s linear infinite'
+                : undefined,
+            },
           });
+
+          if (!communicate) {
+            return React.createElement('g', { key: edge.id }, wirePath);
+          }
+
+          const glowPath = React.createElement('path', {
+            d,
+            fill: 'none',
+            stroke: 'oklch(0.52 0.2 145)',
+            strokeWidth: 9,
+            strokeLinecap: 'round',
+            opacity: 0.14,
+            style: {
+              transition: 'd 280ms cubic-bezier(0.2, 0.9, 0.3, 1)',
+              filter: 'blur(4px)',
+            },
+          });
+
+          const packet1 = React.createElement('circle', { r: 5, fill: '#7dffc9', style: { filter: 'drop-shadow(0 0 6px rgba(52, 211, 153, 0.9))' } },
+            React.createElement(
+              'animateMotion',
+              {
+                dur: '1.6s',
+                repeatCount: 'indefinite',
+                path: d,
+                keyPoints: '0;1',
+                keyTimes: '0;1',
+              },
+            )
+          );
+
+          const packet2 = React.createElement('circle', { r: 3.2, fill: '#f0fff9', opacity: 0.85 },
+            React.createElement(
+              'animateMotion',
+              {
+                dur: '1.6s',
+                begin: '0.8s',
+                repeatCount: 'indefinite',
+                path: d,
+                keyPoints: '0;1',
+                keyTimes: '0;1',
+              },
+            )
+          );
+
+          return React.createElement(
+            'g',
+            { key: edge.id },
+            glowPath,
+            wirePath,
+            packet1,
+            packet2
+          );
         })
       ),
       visibleNodes.map((node) => {
@@ -972,6 +1073,8 @@ export function ADENodeGraphCanvas(props) {
         const isSelected = selectedNodeId === node.id;
         const isCurrent = currentSessionId === node.id;
         const isExpanded = expandedChatNodeIds.has(node.id);
+        const isClosing = closingChatNodeIds.has(node.id);
+        const showChat = isExpanded || isClosing;
 
         let badgeBg = 'oklch(0.24 0.02 260)';
         let badgeFg = 'oklch(0.7 0.02 260)';
@@ -998,7 +1101,7 @@ export function ADENodeGraphCanvas(props) {
               left: pos.x,
               top: pos.y,
               width: isExpanded ? CARD_WIDTH_EXPANDED : CARD_WIDTH_COMPACT,
-              height: isExpanded ? CARD_HEIGHT_EXPANDED : 'auto',
+              height: isExpanded ? CARD_HEIGHT_EXPANDED : CARD_HEIGHT_COMPACT,
               background: isSelected ? 'oklch(0.2 0.025 250)' : 'oklch(0.16 0.018 260)',
               border: isSelected
                 ? '1.5px solid oklch(0.65 0.16 240)'
@@ -1020,7 +1123,7 @@ export function ADENodeGraphCanvas(props) {
               zIndex: isSelected ? 30 : isExpanded ? 25 : 20,
               cursor: 'default',
               overflow: 'hidden',
-              transition: 'box-shadow 160ms ease, border-color 160ms ease',
+              transition: 'width 280ms cubic-bezier(0.2, 0.9, 0.3, 1), height 280ms cubic-bezier(0.2, 0.9, 0.3, 1), padding 280ms cubic-bezier(0.2, 0.9, 0.3, 1), box-shadow 160ms ease, border-color 160ms ease',
             },
             onClick: () => setSelectedNodeId(node.id),
           },
@@ -1172,7 +1275,7 @@ export function ADENodeGraphCanvas(props) {
               )
             )
           ),
-          isExpanded
+          showChat
             ? React.createElement(
                 'div',
                 {
@@ -1186,6 +1289,12 @@ export function ADENodeGraphCanvas(props) {
                     background: 'oklch(0.14 0.015 260)',
                     position: 'relative',
                     overflow: 'hidden',
+                    opacity: isClosing ? 1 : 1,
+                    transform: isClosing ? 'translateY(0) scale(1)' : 'translateY(0) scale(1)',
+                    animation: isClosing
+                      ? 'adeChatFoldOut 240ms cubic-bezier(0.2, 0.9, 0.3, 1) both'
+                      : 'adeChatFoldIn 260ms cubic-bezier(0.2, 0.9, 0.3, 1) both',
+                    pointerEvents: isClosing ? 'none' : 'auto',
                   },
                   onMouseDown: (e) => e.stopPropagation(),
                   onWheel: (e) => e.stopPropagation(),
