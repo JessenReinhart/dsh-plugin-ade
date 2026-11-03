@@ -362,18 +362,19 @@ function ADENodeGraphCanvas(props) {
     return out;
   }, [layoutIdSet, graphData.edges]);
   const visibleNodes = (0, import_react.useMemo)(() => {
+    const effectiveFilter = filterMode === "layout" && layoutIds.length === 0 ? "all" : filterMode;
     return graphData.nodes.filter((node) => {
-      if (filterMode === "running" && !node.running) return false;
-      if (filterMode === "subagents" && !node.isSubagent) return false;
-      if (filterMode === "forks" && !node.isFork) return false;
-      if (filterMode === "layout" && !layoutNodeIds.has(node.id)) return false;
+      if (effectiveFilter === "running" && !node.running) return false;
+      if (effectiveFilter === "subagents" && !node.isSubagent) return false;
+      if (effectiveFilter === "forks" && !node.isFork) return false;
+      if (effectiveFilter === "layout" && !layoutNodeIds.has(node.id)) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         return node.title.toLowerCase().includes(q) || node.id.toLowerCase().includes(q) || node.workspaceTitle.toLowerCase().includes(q);
       }
       return true;
     });
-  }, [graphData.nodes, filterMode, searchQuery, layoutNodeIds]);
+  }, [graphData.nodes, filterMode, searchQuery, layoutNodeIds, layoutIds.length]);
   const visibleNodeIds = (0, import_react.useMemo)(() => new Set(visibleNodes.map((n) => n.id)), [visibleNodes]);
   const visibleEdges = (0, import_react.useMemo)(() => {
     return graphData.edges.filter(
@@ -2436,7 +2437,7 @@ function disposeSubagentRowAction() {
 function ADENodeGraphViewWrapper(props) {
   const sessionId = props && props.sessionId ? props.sessionId : currentMainSessionId();
   const sessionsSnapshot = (0, import_react2.useSyncExternalStore)(subscribeSubagent, () => readSessionsSnapshot());
-  const layoutPanesSnapshot = (0, import_react2.useSyncExternalStore)(subscribe, getSnapshot);
+  const layoutPanesSnapshot = (0, import_react2.useSyncExternalStore)(subscribe, getState);
   const layoutSessionIds = import_react2.default.useMemo(() => {
     const tree = layoutPanesSnapshot && layoutPanesSnapshot.tree;
     const panes = layoutPanesSnapshot && layoutPanesSnapshot.panes;

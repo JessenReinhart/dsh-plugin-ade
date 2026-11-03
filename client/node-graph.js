@@ -386,11 +386,12 @@ export function ADENodeGraphCanvas(props) {
   }, [layoutIdSet, graphData.edges]);
 
   const visibleNodes = useMemo(() => {
+    const effectiveFilter = filterMode === 'layout' && layoutIds.length === 0 ? 'all' : filterMode;
     return graphData.nodes.filter((node) => {
-      if (filterMode === 'running' && !node.running) return false;
-      if (filterMode === 'subagents' && !node.isSubagent) return false;
-      if (filterMode === 'forks' && !node.isFork) return false;
-      if (filterMode === 'layout' && !layoutNodeIds.has(node.id)) return false;
+      if (effectiveFilter === 'running' && !node.running) return false;
+      if (effectiveFilter === 'subagents' && !node.isSubagent) return false;
+      if (effectiveFilter === 'forks' && !node.isFork) return false;
+      if (effectiveFilter === 'layout' && !layoutNodeIds.has(node.id)) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         return (
@@ -401,7 +402,7 @@ export function ADENodeGraphCanvas(props) {
       }
       return true;
     });
-  }, [graphData.nodes, filterMode, searchQuery, layoutNodeIds]);
+  }, [graphData.nodes, filterMode, searchQuery, layoutNodeIds, layoutIds.length]);
 
   const visibleNodeIds = useMemo(() => new Set(visibleNodes.map((n) => n.id)), [visibleNodes]);
 

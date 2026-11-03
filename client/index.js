@@ -727,7 +727,7 @@ function disposeSubagentRowAction() {
 function ADENodeGraphViewWrapper(props) {
   const sessionId = props && props.sessionId ? props.sessionId : currentMainSessionId();
   const sessionsSnapshot = useSyncExternalStore(subscribeSubagent, () => readSessionsSnapshot());
-  const layoutPanesSnapshot = useSyncExternalStore(subscribe, getSnapshot);
+  const layoutPanesSnapshot = useSyncExternalStore(subscribe, getState);
   const layoutSessionIds = React.useMemo(() => {
     const tree = layoutPanesSnapshot && layoutPanesSnapshot.tree;
     const panes = layoutPanesSnapshot && layoutPanesSnapshot.panes;
