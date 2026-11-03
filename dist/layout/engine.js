@@ -113,6 +113,15 @@ function insertOrSplit(tree, sourceId, targetId, zone) {
 function removePane(tree, paneId) {
   return { root: removeNode(tree.root, paneId) };
 }
+function replacePaneId(node, oldId, newId) {
+  if (!node) return null;
+  if (node.kind === "pane") return node.id === oldId ? { kind: "pane", id: newId } : node;
+  return { ...node, children: node.children.map((child) => replacePaneId(child, oldId, newId)) };
+}
+function replaceTreePaneId(tree, oldId, newId) {
+  if (!tree.root || oldId === newId) return tree;
+  return { root: replacePaneId(tree.root, oldId, newId) };
+}
 function clamp01(value) {
   if (Number.isNaN(value)) return 0;
   return Math.max(0, Math.min(1, value));
@@ -183,5 +192,7 @@ export {
   calculateResize,
   computeDropZone,
   insertOrSplit,
-  removePane
+  removePane,
+  replacePaneId,
+  replaceTreePaneId
 };

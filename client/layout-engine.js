@@ -234,6 +234,17 @@ export function swapTreePanes(tree, aId, bId) {
   return { root: swapPanes(tree.root, aId, bId) };
 }
 
+export function replaceNodePaneId(node, oldId, newId) {
+  if (!node) return null;
+  if (node.kind === 'pane') return node.id === oldId ? { kind: 'pane', id: newId } : node;
+  return { ...node, children: node.children.map((c) => replaceNodePaneId(c, oldId, newId)) };
+}
+
+export function replaceTreePaneId(tree, oldId, newId) {
+  if (!tree || !tree.root || oldId === newId) return tree;
+  return { root: replaceNodePaneId(tree.root, oldId, newId) };
+}
+
 export function updateSplitSizes(node, splitId, newSizes) {
   if (!node) return null;
   if (node.kind === 'pane') return node;

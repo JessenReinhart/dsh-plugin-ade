@@ -228,6 +228,21 @@ export function removePane(tree: LayoutTree, paneId: string): LayoutTree {
   return { root: removeNode(tree.root, paneId) };
 }
 
+/**
+ * Replace every pane node carrying `oldId` with `newId`, preserving the tree
+ * shape. Used to switch which subagent a stack pane is currently showing.
+ */
+export function replacePaneId(node: LayoutNode | null, oldId: string, newId: string): LayoutNode | null {
+  if (!node) return null;
+  if (node.kind === 'pane') return node.id === oldId ? { kind: 'pane', id: newId } : node;
+  return { ...node, children: node.children.map((child) => replacePaneId(child, oldId, newId)) };
+}
+
+export function replaceTreePaneId(tree: LayoutTree, oldId: string, newId: string): LayoutTree {
+  if (!tree.root || oldId === newId) return tree;
+  return { root: replacePaneId(tree.root, oldId, newId) };
+}
+
 function clamp01(value: number): number {
   if (Number.isNaN(value)) return 0;
   return Math.max(0, Math.min(1, value));

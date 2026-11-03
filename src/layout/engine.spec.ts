@@ -7,6 +7,7 @@ import {
   computeDropZone,
   insertOrSplit,
   removePane,
+  replaceTreePaneId,
 } from './engine.ts';
 import type {
   LayoutNode,
@@ -386,5 +387,42 @@ describe('removePane', () => {
     const snapshot = JSON.stringify(shape(initial.root));
     removePane(initial, 'b');
     assert.equal(JSON.stringify(shape(initial.root)), snapshot);
+  });
+});
+
+describe('replaceTreePaneId', () => {
+  it('replaces a root pane id', () => {
+    const result = replaceTreePaneId(tree(pane('a')), 'a', 'x');
+    assert.deepEqual(shape(result.root), { kind: 'pane', id: 'x' });
+  });
+
+  it('replaces a nested pane while keeping directions and sizes intact', () => {
+    const initial = tree(
+      split('row', [pane('parent'), split('col', [pane('child-1'), pane('child-2')], [0.4, 0.6])], [0.5, 0.5]),
+    );
+    const result = replaceTreePaneId(initial, 'child-1', 'child-99');
+    assert.deepEqual(shape(result.root), {
+      kind: 'split',
+      direction: 'row',
+      children: [
+        { kind: 'pane', id: 'parent' },
+        {
+          kind: 'split',
+          direction: 'col',
+          children: [
+            { kind: 'pane', id: 'child-99' },
+            { kind: 'pane', id: 'child-2' },
+          ],
+          sizes: [0.4, 0.6],
+        },
+      ],
+      sizes: [0.5, 0.5],
+    });
+  });
+
+  it('returns original tree when oldId does not exist or oldId === newId', () => {
+    const initial = tree(pane('a'));
+    assert.strictEqual(replaceTreePaneId(initial, 'a', 'a'), initial);
+    assert.deepEqual(replaceTreePaneId(initial, 'unknown', 'x'), initial);
   });
 });

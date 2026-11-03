@@ -246,6 +246,15 @@ function swapTreePanes(tree, aId, bId) {
   if (!tree || !tree.root || aId === bId) return tree;
   return { root: swapPanes(tree.root, aId, bId) };
 }
+function replaceNodePaneId(node, oldId, newId) {
+  if (!node) return null;
+  if (node.kind === "pane") return node.id === oldId ? { kind: "pane", id: newId } : node;
+  return { ...node, children: node.children.map((c) => replaceNodePaneId(c, oldId, newId)) };
+}
+function replaceTreePaneId(tree, oldId, newId) {
+  if (!tree || !tree.root || oldId === newId) return tree;
+  return { root: replaceNodePaneId(tree.root, oldId, newId) };
+}
 function updateSplitSizes(node, splitId, newSizes) {
   if (!node) return null;
   if (node.kind === "pane") return node;
@@ -417,6 +426,118 @@ function emitLayoutsChange() {
     } catch (_) {
     }
   }
+}
+var SUBAGENT_AUTOSPLIT_KEY = "dsh-ade-subagent-autosplit";
+var swarmListeners = /* @__PURE__ */ new Set();
+var swarmSnapshot = { stacks: {}, knownIds: /* @__PURE__ */ new Set() };
+var swarmSnapshotCache = null;
+var knownSubagentIds = /* @__PURE__ */ new Set();
+var PINNED_STACK_BY_PARENT = /* @__PURE__ */ new Map();
+function getSubagentAutosplitSetting() {
+  try {
+    if (typeof localStorage === "undefined") return true;
+    return localStorage.getItem(SUBAGENT_AUTOSPLIT_KEY) !== "off";
+  } catch (_) {
+    return true;
+  }
+}
+function setSubagentAutosplitSetting(enabled) {
+  try {
+    if (typeof localStorage !== "undefined") {
+      if (enabled) localStorage.removeItem(SUBAGENT_AUTOSPLIT_KEY);
+      else localStorage.setItem(SUBAGENT_AUTOSPLIT_KEY, "off");
+    }
+  } catch (_) {
+  }
+  emitSubagentSnapshot();
+}
+function emitSubagentSnapshot(patch) {
+  swarmSnapshotCache = null;
+  if (patch) swarmSnapshot = patch;
+  for (const fn of swarmListeners) {
+    try {
+      fn();
+    } catch (_) {
+    }
+  }
+}
+function getSubagentSnapshot() {
+  if (swarmSnapshotCache === null) {
+    swarmSnapshotCache = {
+      stacks: swarmSnapshot.stacks,
+      known: swarmSnapshot.knownIds,
+      pinned: PINNED_STACK_BY_PARENT,
+      autosplit: getSubagentAutosplitSetting()
+    };
+  }
+  return swarmSnapshotCache;
+}
+function subscribeSubagent(fn) {
+  swarmListeners.add(fn);
+  return () => swarmListeners.delete(fn);
+}
+function readSessionsSnapshot() {
+  if (!app || !app.sessions || !app.sessions.list || !app.sessions.list.getSnapshot) return null;
+  try {
+    return app.sessions.list.getSnapshot();
+  } catch (_) {
+    return null;
+  }
+}
+function childEntriesForParent(snapshot, parentId) {
+  if (!snapshot || !parentId) return [];
+  const byId = snapshot.byId || {};
+  const projections = snapshot.projectionsBySession || {};
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const [id, summary] of Object.entries(byId)) {
+    if (summary.origin === "subagent" && summary.parentId === parentId) {
+      seen.add(id);
+      out.push({ id, label: summary.title || summary.label || summary.name || "Subagent", mode: summary.mode || "subagent", running: summary.running === true });
+    }
+  }
+  const projection = projections[parentId];
+  const catalog = projection && projection.values ? projection.values.subagentCatalog : null;
+  for (const entry of catalog || []) {
+    if (!seen.has(entry.id)) {
+      seen.add(entry.id);
+      out.push({ id: entry.id, label: entry.label || entry.title || "Subagent", mode: entry.mode || "subagent", running: false });
+    }
+  }
+  return out;
+}
+function subagentParentOf(snapshot, childId) {
+  if (!snapshot || !childId) return null;
+  const byId = snapshot.byId || {};
+  const summary = byId[childId];
+  if (summary && summary.origin === "subagent" && summary.parentId) return summary.parentId;
+  const projections = snapshot.projectionsBySession || {};
+  for (const [parentId, projection] of Object.entries(projections)) {
+    const catalog = projection && projection.values ? projection.values.subagentCatalog : null;
+    if (Array.isArray(catalog) && catalog.some((entry) => entry.id === childId)) return parentId;
+  }
+  return null;
+}
+function refreshSubagentStacks() {
+  const snapshot = readSessionsSnapshot();
+  const byParent = /* @__PURE__ */ new Map();
+  const sessionSnap = getState();
+  const visibleIds = new Set(sessionSnap.panes.map((p) => p.sessionId));
+  for (const pane of sessionSnap.panes) {
+    const parentId = subagentParentOf(snapshot, pane.sessionId);
+    if (!parentId) continue;
+    if (!byParent.has(parentId)) byParent.set(parentId, { parentId, children: [] });
+    const children = childEntriesForParent(snapshot, parentId);
+    for (const child of children) {
+      if (!byParent.get(parentId).children.some((c) => c.id === child.id)) {
+        byParent.get(parentId).children.push({ ...child, visible: visibleIds.has(child.id) });
+      }
+    }
+  }
+  const nextStacks = {};
+  for (const [parentId, stack] of byParent) nextStacks[parentId] = stack;
+  swarmSnapshot = { stacks: nextStacks, knownIds: knownSubagentIds };
+  emitSubagentSnapshot();
 }
 var cachedCustomLayouts = null;
 function getSavedLayouts() {
@@ -674,6 +795,127 @@ function togglePaneSplitInState(sessionId) {
   if (!state.tree || !state.tree.root) return;
   const nextTree = togglePaneSplit(state.tree, sessionId);
   setTree(nextTree);
+}
+function swapSubagentInPane(currentSessionId, nextSessionId) {
+  if (!currentSessionId || !nextSessionId || currentSessionId === nextSessionId) return;
+  if (!state.tree || !state.tree.root) return;
+  ensureReference(nextSessionId);
+  const nextTree = replaceTreePaneId(state.tree, currentSessionId, nextSessionId);
+  const nextPanes = (state.panes || []).map((p) => {
+    if (p.sessionId === currentSessionId) return { ...p, sessionId: nextSessionId };
+    return p;
+  });
+  state = {
+    tree: nextTree,
+    panes: nextPanes
+  };
+  emit();
+  refreshSubagentStacks();
+  persistActiveState();
+}
+function popOutSubagent(paneSessionId, childIdToPopOut) {
+  if (!childIdToPopOut || !state.tree || !state.tree.root) return;
+  if ((state.panes || []).length >= 4) return;
+  ensureReference(childIdToPopOut);
+  const snapshot = readSessionsSnapshot();
+  const parentId = subagentParentOf(snapshot, childIdToPopOut);
+  const siblings = parentId ? childEntriesForParent(snapshot, parentId) : [];
+  const otherSibling = siblings.find(
+    (c) => c.id !== childIdToPopOut && !(state.panes || []).some((p) => p.sessionId === c.id)
+  );
+  if (paneSessionId === childIdToPopOut && otherSibling) {
+    const swappedTree = replaceTreePaneId(state.tree, paneSessionId, otherSibling.id);
+    const splitTree = insertOrSplit(swappedTree, childIdToPopOut, otherSibling.id, "right");
+    setTree(splitTree);
+  } else {
+    const splitTree = insertOrSplit(state.tree, childIdToPopOut, paneSessionId, "right");
+    setTree(splitTree);
+  }
+}
+function closeSwarmPane(currentSessionId) {
+  const snapshot = readSessionsSnapshot();
+  const parentId = subagentParentOf(snapshot, currentSessionId) || currentSessionId;
+  PINNED_STACK_BY_PARENT.delete(parentId);
+  emitSubagentSnapshot();
+  releaseReference(currentSessionId);
+  const nextPanes = (state.panes || []).filter((p) => p.sessionId !== currentSessionId);
+  if (!state.tree || !state.tree.root || nextPanes.length === 0) {
+    deactivateSplit();
+    return;
+  }
+  const nextTree = removePane(state.tree, currentSessionId);
+  const remainingIds = getTreePaneIds(nextTree ? nextTree.root : null);
+  if (remainingIds.length === 0) {
+    deactivateSplit();
+  } else if (remainingIds.length === 1) {
+    deactivateSplit(remainingIds[0]);
+  } else {
+    setTree(nextTree);
+  }
+}
+function openSubagentStack(parentId) {
+  const snapshot = readSessionsSnapshot();
+  const children = childEntriesForParent(snapshot, parentId);
+  if (!children.length) return;
+  const existing = children.find((c) => getTreePaneIds(state.tree ? state.tree.root : null).includes(c.id));
+  if (existing) {
+    PINNED_STACK_BY_PARENT.set(parentId, existing.id);
+    emitSubagentSnapshot();
+    return;
+  }
+  if ((state.panes || []).length >= 4) return;
+  const firstChild = children.find((c) => c.running) || children[0];
+  ensureReference(firstChild.id);
+  if (!state.tree || !state.tree.root) return;
+  const parentPane = (state.panes || []).find((p) => p.sessionId === parentId);
+  const targetId = parentPane ? parentPane.sessionId : state.panes[0].sessionId;
+  setTree(insertOrSplit(state.tree, firstChild.id, targetId, "right"));
+}
+function reconcileSubagentAutoSplit() {
+  if (!getSubagentAutosplitSetting()) {
+    refreshSubagentStacks();
+    return;
+  }
+  const snapshot = readSessionsSnapshot();
+  if (!snapshot) return;
+  const currentPanes = (state.panes || []).slice();
+  const panesSet = new Set(currentPanes.map((p) => p.sessionId));
+  let visibleParents = [];
+  if (currentPanes.length === 0) {
+    const mainId = currentMainSessionId();
+    if (mainId) visibleParents = [mainId];
+  } else {
+    visibleParents = currentPanes.map((p) => subagentParentOf(snapshot, p.sessionId) || p.sessionId).filter((id) => id);
+    for (const p of currentPanes) {
+      if (!subagentParentOf(snapshot, p.sessionId)) visibleParents.push(p.sessionId);
+    }
+    visibleParents = [...new Set(visibleParents)];
+  }
+  const firstId = currentPanes[0] ? currentPanes[0].sessionId : currentMainSessionId();
+  for (const parentId of visibleParents) {
+    const children = childEntriesForParent(snapshot, parentId);
+    if (!children.length) continue;
+    const runningChild = children.find((c) => c.running);
+    const target = runningChild || children.find((c) => !panesSet.has(c.id)) || children[0];
+    const wantsAutoSwitch = runningChild;
+    const currentlyShownChild = currentPanes.find((p) => subagentParentOf(snapshot, p.sessionId) === parentId && p.sessionId !== parentId);
+    if (currentlyShownChild) {
+      const pinnedValue = PINNED_STACK_BY_PARENT.get(parentId);
+      if (wantsAutoSwitch && pinnedValue !== currentlyShownChild.sessionId) {
+        swapSubagentInPane(currentlyShownChild.sessionId, target.id);
+      }
+    } else if (target && !panesSet.has(target.id)) {
+      if (currentPanes.length === 0 && firstId) {
+        ensureTree({ root: { kind: "pane", id: firstId } }, [{ sessionId: firstId }]);
+      }
+      const anchor = panesSet.has(parentId) ? parentId : firstId || parentId;
+      if (anchor && panesSet.has(anchor)) {
+        ensureReference(target.id);
+        setTree(insertOrSplit(state.tree || ensureTree(null, currentPanes), target.id, anchor, "right"));
+      }
+    }
+  }
+  refreshSubagentStacks();
 }
 var originalConversationPanel = null;
 var wrappedConversationEntry = null;
@@ -1104,6 +1346,27 @@ function injectMotionStyles() {
         color: var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.65));
         background: transparent;
       }
+      [data-ade-subagent-deck] {
+        animation: ade-deck-in 160ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      @keyframes ade-deck-in {
+        from { opacity: 0; transform: translateY(-4px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      [data-ade-subagent-tab][data-status="running"] .ade-swarm-dot {
+        animation: ade-pulse 1.1s ease-in-out infinite;
+      }
+      [data-ade-subagent-tab]:hover {
+        border-color: rgba(255, 255, 255, 0.2) !important;
+        background: rgba(255, 255, 255, 0.08) !important;
+      }
+      @keyframes ade-pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.45; transform: scale(0.78); }
+      }
+      [data-ade-autosplit-row]:hover {
+        background: rgba(255, 255, 255, 0.05);
+      }
       @media (prefers-reduced-motion: reduce) {
         [data-ade-split] [data-ade-pane],
         [data-ade-split] > [data-ade-divider]::before,
@@ -1385,10 +1648,12 @@ function ADELayoutsSection(props) {
   const inputRef = import_react.default.useRef(null);
   const snap = (0, import_react.useSyncExternalStore)(subscribe, getState);
   const layoutSnap = (0, import_react.useSyncExternalStore)(subscribeLayouts, getLayoutsSnapshot);
+  const subagentSnap = (0, import_react.useSyncExternalStore)(subscribeSubagent, getSubagentSnapshot);
   const { customLayouts } = layoutSnap;
   const presets = getPresetLayouts();
   const panes = snap.panes || [];
   const canSave = panes.length >= 1;
+  const autosplit = subagentSnap ? !!subagentSnap.autosplit : true;
   import_react.default.useEffect(() => {
     if (isNaming && inputRef.current) {
       inputRef.current.focus();
@@ -1564,6 +1829,53 @@ function ADELayoutsSection(props) {
             renderLayoutIcon(preset.icon)
           );
         })
+      ),
+      import_react.default.createElement(
+        "div",
+        {
+          "data-ade-autosplit-row": "",
+          style: {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "4px 6px",
+            margin: "2px 0 4px 0",
+            borderRadius: "var(--dsw-radius-sm, 4px)",
+            fontSize: 11,
+            color: "var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.65))",
+            cursor: "default",
+            userSelect: "none"
+          }
+        },
+        import_react.default.createElement(
+          "div",
+          { style: { display: "flex", alignItems: "center", gap: 6 } },
+          import_react.default.createElement("span", { style: { fontSize: 11, color: autosplit ? "#38bdf8" : "var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.4))" } }, "\u26A1"),
+          import_react.default.createElement("span", { style: { fontWeight: 500 } }, "Auto-split Subagents")
+        ),
+        import_react.default.createElement(
+          "button",
+          {
+            type: "button",
+            title: autosplit ? "Subagents automatically open in a stacked right pane" : "Subagents do not auto-split",
+            onClick: (e) => {
+              e.stopPropagation();
+              setSubagentAutosplitSetting(!autosplit);
+            },
+            style: {
+              background: autosplit ? "rgba(56, 189, 248, 0.16)" : "rgba(255, 255, 255, 0.06)",
+              border: `1px solid ${autosplit ? "rgba(56, 189, 248, 0.38)" : "rgba(255, 255, 255, 0.12)"}`,
+              color: autosplit ? "#38bdf8" : "var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.45))",
+              fontSize: 9.5,
+              fontWeight: 700,
+              padding: "1px 6px",
+              borderRadius: 999,
+              cursor: "pointer",
+              letterSpacing: "0.04em"
+            }
+          },
+          autosplit ? "ON" : "OFF"
+        )
       ),
       customLayouts.length > 0 ? customLayouts.map((layout) => {
         const isActive = isCustomActive(layout, snap);
@@ -1790,6 +2102,253 @@ function ADEPaneTelemetry(props) {
   if (typeof props.useSessionStatus !== "function") return null;
   return import_react.default.createElement(ADEPaneTelemetryReader, props);
 }
+function useSubagentChildStatus(sessionId, useSessionStatus) {
+  if (typeof useSessionStatus !== "function") return { running: false, pending: false };
+  return useSessionStatus(
+    (snapshot) => snapshot && typeof snapshot.get === "function" ? snapshot.get(sessionId) : void 0
+  );
+}
+function ADESubagentChip(props) {
+  const { child, active, onSelect, onPopOut, useSessionStatus } = props;
+  const status = useSubagentChildStatus(child.id, useSessionStatus);
+  const running = !!(status && status.running);
+  const pending = !!(status && status.pendingInteraction);
+  const dotColor = running ? "#34d399" : pending ? "#f59e0b" : "rgba(255, 255, 255, 0.38)";
+  const glowColor = running ? "rgba(52, 211, 153, 0.5)" : pending ? "rgba(245, 158, 11, 0.5)" : "transparent";
+  return import_react.default.createElement(
+    "button",
+    {
+      key: child.id,
+      type: "button",
+      "data-ade-subagent-tab": active ? "active" : "",
+      "data-status": running ? "running" : pending ? "pending" : "idle",
+      title: child.label || child.id,
+      draggable: false,
+      onClick: () => onSelect(child.id),
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        height: 24,
+        padding: "0 6px",
+        borderRadius: 6,
+        background: active ? "rgba(56, 189, 248, 0.16)" : "rgba(255, 255, 255, 0.04)",
+        border: `1px solid ${active ? "rgba(56, 189, 248, 0.5)" : "rgba(255, 255, 255, 0.08)"}`,
+        color: active ? "#e0f2fe" : "var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.7))",
+        fontSize: 11.5,
+        fontWeight: active ? 700 : 500,
+        cursor: "pointer",
+        flex: "0 0 auto",
+        transition: "background 150ms ease, border-color 150ms ease, color 150ms ease",
+        whiteSpace: "nowrap",
+        maxWidth: 160,
+        boxShadow: active ? "none" : void 0
+      }
+    },
+    import_react.default.createElement("span", {
+      className: "ade-swarm-dot",
+      style: {
+        width: 7,
+        height: 7,
+        borderRadius: "50%",
+        background: dotColor,
+        boxShadow: `0 0 6px ${glowColor}`,
+        flex: "0 0 auto"
+      }
+    }),
+    import_react.default.createElement("span", {
+      style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }
+    }, child.label || child.id),
+    import_react.default.createElement(ADESubagentKidActions, {
+      childId: child.id,
+      active,
+      onPopOut
+    })
+  );
+}
+function ADESubagentKidActions(props) {
+  const { childId, active, onPopOut } = props;
+  return import_react.default.createElement(
+    "span",
+    { style: { display: "inline-flex", gap: 4, marginLeft: 2 } },
+    active ? import_react.default.createElement("button", {
+      type: "button",
+      title: "Pop this subagent into its own pane",
+      style: {
+        background: "transparent",
+        border: "none",
+        color: "rgba(255, 255, 255, 0.6)",
+        cursor: "pointer",
+        fontSize: 12,
+        lineHeight: 1,
+        padding: "0 2px",
+        borderRadius: 3
+      },
+      "data-ade-popout": "",
+      onClick: (e) => {
+        e.stopPropagation();
+        onPopOut(childId);
+      }
+    }, "\u2922") : null
+  );
+}
+function ADESubagentDeck(props) {
+  const { parentId, paneSessionId, useSessionStatus } = props;
+  const snap = (0, import_react.useSyncExternalStore)(subscribeSubagent, getSubagentSnapshot);
+  const sessionSnapshot = readSessionsSnapshot();
+  const children = childEntriesForParent(sessionSnapshot, parentId);
+  const pinned = snap.pinned && snap.pinned instanceof Map ? snap.pinned : PINNED_STACK_BY_PARENT;
+  const statusSnap = useSessionStatus ? useSessionStatus((s) => s) : null;
+  const runningCount = children.reduce((acc, child) => {
+    const st = statusSnap && typeof statusSnap.get === "function" ? statusSnap.get(child.id) : void 0;
+    return acc + (st && st.running ? 1 : 0);
+  }, 0);
+  void pinned;
+  const onSelect = (childId) => {
+    PINNED_STACK_BY_PARENT.set(parentId, childId);
+    emitSubagentSnapshot();
+    if (!childId || childId === paneSessionId) return;
+    swapSubagentInPane(paneSessionId, childId);
+  };
+  const onPopOut = (childId) => popOutSubagent(paneSessionId, childId);
+  const onDismiss = () => {
+    PINNED_STACK_BY_PARENT.delete(parentId);
+    emitSubagentSnapshot();
+    const paneToClose = (state.panes || []).find((p) => p.sessionId === paneSessionId);
+    if (paneToClose) closeSwarmPane(paneSessionId);
+  };
+  return import_react.default.createElement(
+    "div",
+    {
+      "data-ade-subagent-deck": "",
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "7px 8px 8px",
+        background: "rgba(10, 10, 14, 0.35)",
+        backdropFilter: "blur(10px)",
+        WebkitBackdropFilter: "blur(10px)",
+        borderBottom: "1px solid rgba(255, 255, 255, 0.06)",
+        flex: "0 0 auto",
+        minHeight: 41,
+        boxSizing: "border-box"
+      }
+    },
+    import_react.default.createElement(
+      "div",
+      {
+        style: {
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 5,
+          height: 22,
+          padding: "0 7px",
+          borderRadius: 999,
+          background: runningCount > 0 ? "rgba(52, 211, 153, 0.14)" : "rgba(255, 255, 255, 0.06)",
+          border: "1px solid rgba(255, 255, 255, 0.1)",
+          flex: "0 0 auto"
+        }
+      },
+      children.length > 0 ? import_react.default.createElement("span", {
+        style: {
+          fontSize: 9.5,
+          fontWeight: 800,
+          letterSpacing: "0.08em",
+          color: runningCount > 0 ? "#a7f3d0" : "var(--dsw-alias-label-tertiary, rgba(255,255,255,0.55))"
+        }
+      }, "SWARM") : null,
+      import_react.default.createElement("span", {
+        style: {
+          fontSize: 10.5,
+          fontWeight: 700,
+          fontVariantNumeric: "tabular-nums",
+          color: "var(--dsw-alias-label-secondary, rgba(255,255,255,0.8))"
+        }
+      }, String(children.length))
+    ),
+    import_react.default.createElement(
+      "div",
+      {
+        style: {
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          overflowX: "auto",
+          overflowY: "hidden",
+          flex: "1 1 auto",
+          minWidth: 0,
+          scrollbarWidth: "none"
+        }
+      },
+      children.map(
+        (child) => import_react.default.createElement(ADESubagentChip, {
+          key: child.id,
+          child,
+          active: child.id === paneSessionId,
+          useSessionStatus,
+          onSelect,
+          onPopOut
+        })
+      )
+    ),
+    import_react.default.createElement(
+      "span",
+      { style: { display: "inline-flex", alignItems: "center", gap: 4, flex: "0 0 auto" } },
+      import_react.default.createElement("button", {
+        type: "button",
+        title: "Dismiss this subagent stack",
+        style: {
+          background: "transparent",
+          border: "none",
+          color: "rgba(255, 255, 255, 0.55)",
+          cursor: "pointer",
+          fontSize: 15,
+          lineHeight: 1,
+          padding: "2px 4px",
+          borderRadius: 4
+        },
+        "data-ade-dismiss-deck": "",
+        onClick: onDismiss
+      }, "\u2715")
+    )
+  );
+}
+function ADESubagentParentBadge(props) {
+  const { parentId, onClick } = props;
+  const sessionSnapshot = readSessionsSnapshot();
+  const children = childEntriesForParent(sessionSnapshot, parentId);
+  if (!children.length) return null;
+  return import_react.default.createElement(
+    "button",
+    {
+      type: "button",
+      "data-ade-subagent-badge": "",
+      title: `${children.length} subagent${children.length === 1 ? "" : "s"}. Click to open the swarm stack.`,
+      draggable: false,
+      onClick,
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 5,
+        height: 20,
+        padding: "0 7px",
+        marginLeft: 2,
+        borderRadius: 999,
+        background: "rgba(56, 189, 248, 0.14)",
+        border: "1px solid rgba(56, 189, 248, 0.35)",
+        color: "#bae6fd",
+        fontSize: 10.5,
+        fontWeight: 700,
+        cursor: "pointer",
+        flex: "0 0 auto",
+        fontVariantNumeric: "tabular-nums"
+      }
+    },
+    "\u29C9 ",
+    String(children.length)
+  );
+}
 function ADESplitRoot(props) {
   const renderSlot = typeof props.renderSlot === "function" ? props.renderSlot : cachedRenderSlot;
   const SessionProvider = typeof props.SessionProvider === "function" ? props.SessionProvider : cachedSessionProvider;
@@ -1967,6 +2526,12 @@ function ADESplitPaneItem(props) {
   const title = sessionTitle(pane.sessionId);
   const ws = workspaceOf(pane.sessionId);
   const mounted = idx === 0 || idx < mountedCount;
+  const swarmSnapshot2 = (0, import_react.useSyncExternalStore)(subscribeSubagent, getSubagentSnapshot);
+  void swarmSnapshot2;
+  const sessionsSnapshot = readSessionsSnapshot();
+  const paneParentId = subagentParentOf(sessionsSnapshot, pane.sessionId);
+  const stackChildren = paneParentId ? childEntriesForParent(sessionsSnapshot, paneParentId) : [];
+  const parentChildren = !paneParentId ? childEntriesForParent(sessionsSnapshot, pane.sessionId) : [];
   const isImmediatelyOpen = (() => {
     if (idx === 0) return true;
     try {
@@ -2121,6 +2686,10 @@ function ADESplitPaneItem(props) {
         sessionId: pane.sessionId,
         useSessionStatus
       }),
+      parentChildren.length > 0 ? import_react.default.createElement(ADESubagentParentBadge, {
+        parentId: pane.sessionId,
+        onClick: () => openSubagentStack(pane.sessionId)
+      }) : null,
       import_react.default.createElement("button", {
         style: { ...closeButtonStyle, fontWeight: 700 },
         "aria-label": splitDirection === "col" ? "Split side by side (horizontal)" : "Split stacked (vertical)",
@@ -2137,6 +2706,11 @@ function ADESplitPaneItem(props) {
         onClick: () => closePane(pane.sessionId)
       }, "\xD7")
     ),
+    stackChildren.length > 0 ? import_react.default.createElement(ADESubagentDeck, {
+      parentId: paneParentId,
+      paneSessionId: pane.sessionId,
+      useSessionStatus
+    }) : null,
     import_react.default.createElement(
       "div",
       { style: { flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column" } },
@@ -2232,6 +2806,25 @@ function apply(ctx) {
     pluginCtx.slots.subscribe("main", ensureConversationWrapped);
   }
   restorePersistedSplit();
+  const seedKnownSubagentIds = () => {
+    const snapshot = readSessionsSnapshot();
+    if (!snapshot || !snapshot.byId) return;
+    for (const [id, summary] of Object.entries(snapshot.byId)) {
+      if (summary && summary.origin === "subagent") knownSubagentIds.add(id);
+    }
+    refreshSubagentStacks();
+  };
+  seedKnownSubagentIds();
+  let subagentUnsub = null;
+  if (app && app.sessions && app.sessions.list && app.sessions.list.subscribe) {
+    subagentUnsub = app.sessions.list.subscribe(() => {
+      try {
+        reconcileSubagentAutoSplit();
+      } catch (err) {
+        if (typeof console !== "undefined") console.error("[ADE] subagent reconcile failed", err);
+      }
+    });
+  }
   let pendingSessionId = null;
   let warmedSessionId = null;
   let overCenter = false;
@@ -2506,6 +3099,7 @@ function apply(ctx) {
       restoreSidebar();
       disposeAlias();
       if (typeof unsub === "function") unsub();
+      if (typeof subagentUnsub === "function") subagentUnsub();
       for (const id of [...retained.keys()]) releaseReference(id);
       app = null;
     };
@@ -2521,6 +3115,7 @@ function apply(ctx) {
     restoreConversationPanel();
     restoreSidebar();
     disposeAlias();
+    if (typeof subagentUnsub === "function") subagentUnsub();
     for (const id of [...retained.keys()]) releaseReference(id);
     app = null;
   };
