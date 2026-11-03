@@ -1,4 +1,5 @@
 import React, { useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import {
   makeSplitId,
   normalizeSizes,
@@ -677,6 +678,48 @@ let cachedRenderSlot = null;
 let cachedSessionProvider = null;
 let cachedUseSessionStatus = null;
 let aliasDispose = null;
+let subagentRowActionDispose = null;
+
+const expandedSessionIds = new Set();
+const expandedListeners = new Set();
+function emitExpandedChange() { for (const fn of expandedListeners) { try { fn(); } catch (_) {} } }
+function subscribeExpanded(fn) { expandedListeners.add(fn); return () => expandedListeners.delete(fn); }
+function getExpandedSnapshot() { return expandedSessionIds; }
+function toggleExpandedSession(sessionId) {
+  if (!sessionId) return;
+  if (expandedSessionIds.has(sessionId)) expandedSessionIds.delete(sessionId);
+  else expandedSessionIds.add(sessionId);
+  emitExpandedChange();
+}
+function getPortalFn() {
+  if (typeof createPortal === 'function') return createPortal;
+  return null;
+}
+
+function ensureSubagentRowActionRegistered() {
+  refreshHandles();
+  if (!app || !app.slots || !app.slots.register) return false;
+  try {
+    const entries = app.slots.entries('sidebar.workspaces.session.row.action') || [];
+    if (entries.some((entry) => entry && entry.options && entry.options.id === 'ade-subagent-expander')) return true;
+    subagentRowActionDispose = app.slots.register(
+      {
+        name: 'sidebar.workspaces.session.row.action',
+        id: 'ade-subagent-expander',
+        order: 350,
+      },
+      ADESubagentRowExpander
+    );
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function disposeSubagentRowAction() {
+  try { subagentRowActionDispose?.(); } catch (_) {}
+  subagentRowActionDispose = null;
+}
 
 function ensureAliasRegistered() {
   refreshHandles();
@@ -1157,6 +1200,144 @@ function injectMotionStyles() {
       [data-ade-autosplit-row]:hover {
         background: rgba(255, 255, 255, 0.05);
       }
+      /* Subagent expander button on parent session row */
+      [data-ade-subagent-expander] {
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 3px !important;
+        height: 18px !important;
+        padding: 0 5px !important;
+        border-radius: 4px !important;
+        background: rgba(255, 255, 255, 0.08) !important;
+        border: 1px solid rgba(255, 255, 255, 0.06) !important;
+        color: var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.65)) !important;
+        cursor: pointer !important;
+        font-size: 11px !important;
+        line-height: 1 !important;
+        user-select: none !important;
+        opacity: 0.85 !important;
+        visibility: visible !important;
+        margin-left: 2px !important;
+        transition: all 140ms ease !important;
+        vertical-align: middle !important;
+      }
+      [data-ade-subagent-expander]:hover {
+        opacity: 1 !important;
+        background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.16)) !important;
+        color: var(--dsw-alias-label-primary, #ffffff) !important;
+        border-color: rgba(255, 255, 255, 0.14) !important;
+      }
+      [data-ade-subagent-expander][data-expanded="true"] {
+        background: rgba(79, 120, 255, 0.18) !important;
+        border-color: rgba(79, 120, 255, 0.35) !important;
+        color: var(--dsw-alias-brand, #7ba0ff) !important;
+      }
+      [data-ade-subagent-running-dot] {
+        display: inline-block !important;
+        width: 5px !important;
+        height: 5px !important;
+        border-radius: 50% !important;
+        background: #00d26a !important;
+        box-shadow: 0 0 5px rgba(0, 210, 106, 0.8) !important;
+        animation: ade-pulse 1.8s infinite !important;
+      }
+      /* Ensure rowActions container is visible when it contains the subagent expander badge */
+      [class*="sessionRow"]:has([data-ade-subagent-expander]) [class*="rowActions"] {
+        opacity: 1 !important;
+        visibility: visible !important;
+      }
+      /* Other sibling actions inside rowActions remain hover-only */
+      [class*="sessionRow"]:not(:hover) [class*="rowActions"] > button:not([data-ade-subagent-expander]) {
+        opacity: 0 !important;
+        pointer-events: none !important;
+      }
+      /* Subagent child tree styling in sidebar */
+      [data-ade-subagent-children] {
+        display: flex !important;
+        flex-direction: column !important;
+        padding-left: 22px !important;
+        margin: 2px 0 4px 0 !important;
+        position: relative !important;
+      }
+      [data-ade-subagent-row] {
+        display: flex !important;
+        align-items: center !important;
+        gap: 6px !important;
+        height: 26px !important;
+        padding: 0 8px !important;
+        border-radius: var(--dsw-radius-sm, 6px) !important;
+        cursor: pointer !important;
+        user-select: none !important;
+        font-size: 12px !important;
+        color: var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.65)) !important;
+        transition: background 100ms ease, color 100ms ease !important;
+        position: relative !important;
+      }
+      [data-ade-subagent-row]:hover {
+        background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08)) !important;
+        color: var(--dsw-alias-label-primary, #ffffff) !important;
+      }
+      [data-ade-subagent-row][data-selected="true"] {
+        background: rgba(56, 189, 248, 0.12) !important;
+        color: #38bdf8 !important;
+        font-weight: 600 !important;
+      }
+      [data-ade-tree-branch] {
+        font-family: monospace !important;
+        font-size: 11px !important;
+        color: var(--dsw-alias-border-l3, rgba(255, 255, 255, 0.22)) !important;
+        flex: 0 0 auto !important;
+      }
+      [data-ade-subagent-dot] {
+        width: 6px !important;
+        height: 6px !important;
+        border-radius: 50% !important;
+        flex: 0 0 auto !important;
+      }
+      [data-ade-subagent-dot="running"] {
+        background: #00d26a !important;
+        box-shadow: 0 0 6px rgba(0, 210, 106, 0.7) !important;
+        animation: ade-pulse 1.8s infinite !important;
+      }
+      [data-ade-subagent-dot="done"] {
+        background: rgba(255, 255, 255, 0.25) !important;
+      }
+      [data-ade-subagent-title] {
+        flex: 1 1 auto !important;
+        min-width: 0 !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+      }
+      [data-ade-subagent-badge="running"] {
+        flex: 0 0 auto !important;
+        font-size: 10px !important;
+        padding: 1px 4px !important;
+        border-radius: 3px !important;
+        background: rgba(0, 210, 106, 0.15) !important;
+        color: #00d26a !important;
+        line-height: 1.2 !important;
+      }
+      [data-ade-child-split-btn] {
+        display: none !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 18px !important;
+        height: 18px !important;
+        padding: 0 !important;
+        border-radius: 3px !important;
+        background: transparent !important;
+        border: none !important;
+        color: var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.45)) !important;
+        cursor: pointer !important;
+      }
+      [data-ade-child-split-btn]:hover {
+        background: rgba(255, 255, 255, 0.12) !important;
+        color: var(--dsw-alias-label-primary, #ffffff) !important;
+      }
+      [data-ade-subagent-row]:hover [data-ade-child-split-btn] {
+        display: inline-flex !important;
+      }
       @media (prefers-reduced-motion: reduce) {
         [data-ade-split] [data-ade-pane],
         [data-ade-split] > [data-ade-divider]::before,
@@ -1385,15 +1566,15 @@ function adeIcon(type, size) {
   const style = { flex: '0 0 auto', width: px, height: px };
   const stroke = { stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round', strokeLinejoin: 'round' };
   switch (type) {
-    case 'chevron-right':
-      return React.createElement(
-        'svg', { width: px, height: px, viewBox: '0 0 14 14', fill: 'none', style },
-        React.createElement('path', { d: 'M5 2.5 9.5 7l-4.5 4.5', ...stroke })
-      );
     case 'chevron-left':
       return React.createElement(
         'svg', { width: px, height: px, viewBox: '0 0 14 14', fill: 'none', style },
         React.createElement('path', { d: 'M9 2.5 4.5 7l4.5 4.5', ...stroke })
+      );
+    case 'chevron-right':
+      return React.createElement(
+        'svg', { width: px, height: px, viewBox: '0 0 14 14', fill: 'none', style },
+        React.createElement('path', { d: 'M5 2.5 9.5 7 5 11.5', ...stroke })
       );
     case 'chevron-down':
       return React.createElement(
@@ -2121,6 +2302,215 @@ function ADESubagentKidActions(props) {
           'data-ade-popout': '',
           onClick: (e) => { e.stopPropagation(); onPopOut(childId); },
         }, adeIcon('popout', 10))
+      : null
+  );
+}
+
+function ADESubagentChildRow(props) {
+  const { parentSessionId, child, isLast } = props;
+
+  const isSelected =
+    child.id === currentMainSessionId() ||
+    (state.panes && state.panes.some((p) => p.sessionId === child.id));
+
+  const handleOpen = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (app && app.uiWorkspace && typeof app.uiWorkspace.openSession === 'function') {
+      try {
+        app.uiWorkspace.openSession({
+          parentSessionId,
+          childSessionId: child.id,
+          mode: child.mode,
+        });
+        return;
+      } catch (_) {}
+      try {
+        app.uiWorkspace.openSession(child.id);
+      } catch (_) {}
+    }
+  };
+
+  const handleSplitAside = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const currentPanes = state.panes && state.panes.length > 0 ? state.panes : [];
+    const firstId = currentPanes[0]?.sessionId || parentSessionId;
+    ensureReference(child.id);
+    const newTree = insertOrSplit(
+      state.tree || ensureTree(null, [{ sessionId: firstId }]),
+      child.id,
+      firstId,
+      'right'
+    );
+    setTree(newTree);
+  };
+
+  return React.createElement(
+    'div',
+    {
+      'data-ade-subagent-row': '',
+      'data-row-key': `session:${child.id}`,
+      'data-selected': isSelected ? 'true' : 'false',
+      draggable: true,
+      role: 'treeitem',
+      title: `${child.label} (${child.running ? 'running' : 'completed'}) — click to open`,
+      onClick: handleOpen,
+      onDragStart: (e) => {
+        e.stopPropagation();
+        if (e.dataTransfer) {
+          try { e.dataTransfer.effectAllowed = 'move'; } catch (_) {}
+          try { e.dataTransfer.setData('text/plain', child.id); } catch (_) {}
+        }
+      },
+    },
+    React.createElement('span', { 'data-ade-tree-branch': '' }, isLast ? '└─' : '├─'),
+    React.createElement('span', {
+      'data-ade-subagent-dot': child.running ? 'running' : 'done',
+    }),
+    React.createElement('span', { 'data-ade-subagent-title': '' }, child.label),
+    child.running
+      ? React.createElement('span', { 'data-ade-subagent-badge': 'running' }, 'running')
+      : null,
+    React.createElement(
+      'button',
+      {
+        type: 'button',
+        'data-ade-child-split-btn': '',
+        title: 'Open in split pane',
+        'aria-label': 'Open in split pane',
+        onClick: handleSplitAside,
+      },
+      adeIcon('split-cols', 11)
+    )
+  );
+}
+
+function ADESubagentChildList(props) {
+  const { parentSessionId, children } = props;
+  return React.createElement(
+    'div',
+    {
+      'data-ade-subagent-children': '',
+      'data-parent-id': parentSessionId,
+    },
+    children.map((child, index) =>
+      React.createElement(ADESubagentChildRow, {
+        key: child.id,
+        parentSessionId,
+        child,
+        isLast: index === children.length - 1,
+      })
+    )
+  );
+}
+
+function ADESubagentRowExpander(props) {
+  const sessionId = props.sessionId || (props.node && props.node.id);
+  if (!sessionId) return null;
+
+  const sessionSnap = useSyncExternalStore(subscribeSubagent, () => readSessionsSnapshot());
+  const isExpanded = useSyncExternalStore(subscribeExpanded, () => expandedSessionIds.has(sessionId));
+
+  const children = React.useMemo(() => {
+    return childEntriesForParent(sessionSnap, sessionId);
+  }, [sessionSnap, sessionId]);
+
+  const [hostEl, setHostEl] = React.useState(null);
+
+  React.useEffect(() => {
+    if (!isExpanded || children.length === 0) {
+      if (hostEl && hostEl.parentNode) {
+        try { hostEl.parentNode.removeChild(hostEl); } catch (_) {}
+      }
+      setHostEl(null);
+      return;
+    }
+
+    const syncHost = () => {
+      const parentRow = document.querySelector(`[data-row-key="session:${sessionId}"]`);
+      if (!parentRow || !parentRow.parentNode) return;
+
+      let host = hostEl;
+      if (!host || !host.parentNode || host.previousElementSibling !== parentRow) {
+        if (!host) {
+          host = document.createElement('div');
+          host.setAttribute('data-ade-subagent-host', sessionId);
+          host.style.width = '100%';
+        }
+        parentRow.parentNode.insertBefore(host, parentRow.nextSibling);
+        setHostEl(host);
+      }
+    };
+
+    syncHost();
+    const interval = setInterval(syncHost, 1000);
+
+    return () => {
+      clearInterval(interval);
+      if (hostEl && hostEl.parentNode) {
+        try { hostEl.parentNode.removeChild(hostEl); } catch (_) {}
+      }
+    };
+  }, [isExpanded, sessionId, children.length, hostEl]);
+
+  if (children.length === 0) return null;
+
+  const hasRunning = children.some((c) => c.running);
+  const portalFn = getPortalFn();
+
+  const chevronSvg = React.createElement(
+    'svg',
+    {
+      width: 10,
+      height: 10,
+      viewBox: '0 0 10 10',
+      fill: 'none',
+      style: {
+        transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+        transition: 'transform 160ms cubic-bezier(0.2, 0.9, 0.3, 1)',
+      },
+    },
+    React.createElement('path', {
+      d: 'M3.5 2L6.5 5L3.5 8',
+      stroke: 'currentColor',
+      strokeWidth: 1.4,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+    })
+  );
+
+  return React.createElement(
+    React.Fragment,
+    null,
+    React.createElement(
+      'button',
+      {
+        type: 'button',
+        'data-ade-subagent-expander': '',
+        'data-expanded': isExpanded ? 'true' : 'false',
+        title: `${children.length} subagent${children.length > 1 ? 's' : ''} (${isExpanded ? 'click to collapse' : 'click to expand'})`,
+        'aria-label': `${children.length} subagents`,
+        onClick: (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          toggleExpandedSession(sessionId);
+        },
+      },
+      chevronSvg,
+      hasRunning
+        ? React.createElement('span', { 'data-ade-subagent-running-dot': '' })
+        : null,
+      React.createElement('span', { 'data-ade-subagent-count': '' }, String(children.length))
+    ),
+    isExpanded && hostEl && portalFn
+      ? portalFn(
+          React.createElement(ADESubagentChildList, {
+            parentSessionId: sessionId,
+            children,
+          }),
+          hostEl
+        )
       : null
   );
 }
@@ -2962,10 +3352,12 @@ export function apply(ctx) {
   ensureConversationWrapped();
   ensureSidebarWrapped();
   ensureAliasRegistered();
+  ensureSubagentRowActionRegistered();
 
   if (pluginCtx && pluginCtx.slots && pluginCtx.slots.subscribe) {
     pluginCtx.slots.subscribe('sidebar.workspaces', ensureSidebarWrapped);
     pluginCtx.slots.subscribe('main', ensureConversationWrapped);
+    pluginCtx.slots.subscribe('sidebar.workspaces.session.row.action', ensureSubagentRowActionRegistered);
   }
 
   restorePersistedSplit();
@@ -2986,6 +3378,7 @@ export function apply(ctx) {
   if (app && app.sessions && app.sessions.list && app.sessions.list.subscribe) {
     subagentUnsub = app.sessions.list.subscribe(() => {
       try {
+        emitSubagentSnapshot();
         reconcileSubagentAutoSplit();
       } catch (err) {
         if (typeof console !== 'undefined') console.error('[ADE] subagent reconcile failed', err);
@@ -3294,6 +3687,7 @@ export function apply(ctx) {
       restoreConversationPanel();
       restoreSidebar();
       disposeAlias();
+      disposeSubagentRowAction();
       if (typeof unsub === 'function') unsub();
       if (typeof subagentUnsub === 'function') subagentUnsub();
       for (const id of [...retained.keys()]) releaseReference(id);
@@ -3312,6 +3706,7 @@ export function apply(ctx) {
     restoreConversationPanel();
     restoreSidebar();
     disposeAlias();
+    disposeSubagentRowAction();
     if (typeof subagentUnsub === 'function') subagentUnsub();
     for (const id of [...retained.keys()]) releaseReference(id);
     app = null;
