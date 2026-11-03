@@ -1880,6 +1880,7 @@ export function apply(ctx) {
     }
 
     e.preventDefault();
+    e.stopPropagation();
     if (e.dataTransfer) {
       try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
     }
@@ -1907,30 +1908,25 @@ export function apply(ctx) {
     }
 
     if (reorderDragFromSessionId && targetSessionId === reorderDragFromSessionId) {
-      const isPointInside = (r, x, y) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
-      const allPanes = Array.from(document.querySelectorAll('[data-ade-pane]'));
-      const siblingEl = allPanes.find((el) => {
-        if (el === paneEl) return false;
-        const r = el.getBoundingClientRect();
-        return isPointInside(r, e.clientX, e.clientY);
-      });
-      if (siblingEl) {
-        targetSessionId = siblingEl.getAttribute('data-ade-session-id');
-        rect = siblingEl.getBoundingClientRect();
-      } else {
-        const closest = allPanes
-          .filter((el) => el !== paneEl)
-          .map((el) => {
-            const r = el.getBoundingClientRect();
-            const cx = r.left + r.width / 2;
-            const cy = r.top + r.height / 2;
-            const dist = Math.hypot(e.clientX - cx, e.clientY - cy);
-            return { el, dist, rect: r };
-          })
-          .sort((a, b) => a.dist - b.dist)[0];
-        if (closest && closest.dist < 260) {
-          targetSessionId = closest.el.getAttribute('data-ade-session-id');
-          rect = closest.rect;
+      const selfRes = computeDropZone(rect, e.clientX, e.clientY, true).zone;
+      const splitInfo = getImmediateSplitInfo(state.tree ? state.tree.root : null, reorderDragFromSessionId);
+      if (
+        selfRes !== 'center' &&
+        splitInfo &&
+        splitInfo.siblingPaneId &&
+        selfRes !== splitInfo.currentSide
+      ) {
+        const siblingEl = document.querySelector(
+          `[data-ade-pane][data-ade-session-id="${splitInfo.siblingPaneId}"]`
+        );
+        if (siblingEl) {
+          const sibRect = siblingEl.getBoundingClientRect();
+          const minL = Math.min(rect.left, sibRect.left);
+          const minT = Math.min(rect.top, sibRect.top);
+          const maxR = Math.max(rect.left + rect.width, sibRect.left + sibRect.width);
+          const maxB = Math.max(rect.top + rect.height, sibRect.top + sibRect.height);
+          rect = { left: minL, top: minT, width: maxR - minL, height: maxB - minT };
+          targetSessionId = splitInfo.siblingPaneId;
         }
       }
       if (targetSessionId === reorderDragFromSessionId) {
@@ -1949,21 +1945,16 @@ export function apply(ctx) {
     }
 
     const allowCenter = isReorder;
-    const zone = computeDropZone(rect, e.clientX, e.clientY, allowCenter);
+    const drop = computeDropZone(rect, e.clientX, e.clientY, allowCenter);
+    const zone = drop.zone;
+    const previewBox = {
+      left: drop.rect.left + 4,
+      top: drop.rect.top + 4,
+      width: Math.max(20, drop.rect.width - 8),
+      height: Math.max(20, drop.rect.height - 8),
+    };
     currentTargetSessionId = targetSessionId;
     currentTargetZone = zone;
-
-    let previewBox = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
-    if (zone === 'left') previewBox.width = rect.width / 2;
-    else if (zone === 'right') { previewBox.left = rect.left + rect.width / 2; previewBox.width = rect.width / 2; }
-    else if (zone === 'top') previewBox.height = rect.height / 2;
-    else if (zone === 'bottom') { previewBox.top = rect.top + rect.height / 2; previewBox.height = rect.height / 2; }
-    else if (zone === 'center') {
-      previewBox.left = rect.left + 8;
-      previewBox.top = rect.top + 8;
-      previewBox.width = rect.width - 16;
-      previewBox.height = rect.height - 16;
-    }
 
     const ov = overlay();
     ov.style.left = `${previewBox.left}px`;
@@ -2025,18 +2016,22 @@ export function apply(ctx) {
         const nextTree = insertOrSplit(currentTree, droppedId, anchor, targetZone);
         activateSplitWithTree(nextTree);
       } else {
-        const activeId = currentMainSessionId();
+        const activeId = currentMainSessionId() || (app?.sessions?.list?.getSnapshot?.()?.ids?.[0]);
+        let initialTree;
+        const targetZone = zone === 'center' || !zone ? 'right' : zone;
         if (!activeId || activeId === droppedId) {
           const snapshot = app?.sessions?.list?.getSnapshot?.();
-          const otherId = snapshot?.order?.find((id) => id !== droppedId);
+          const ids = snapshot?.ids || snapshot?.order || [];
+          const otherId = ids.find((id) => id !== activeId);
           if (otherId) {
-            activateSplit([otherId, droppedId]);
+            initialTree = insertOrSplit({ root: { kind: 'pane', id: activeId || droppedId } }, otherId, activeId || droppedId, targetZone);
           } else {
-            activateSplit([droppedId]);
+            initialTree = { root: { kind: 'pane', id: droppedId } };
           }
         } else {
-          activateSplit([activeId, droppedId]);
+          initialTree = insertOrSplit({ root: { kind: 'pane', id: activeId } }, droppedId, activeId, targetZone);
         }
+        activateSplitWithTree(initialTree);
       }
     }
   };
