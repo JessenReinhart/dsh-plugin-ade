@@ -1,0 +1,8 @@
+# @community/dsh-plugin-ade bundle patch
+# Mounts the Agentic Development Environment plugin into the host composition.
+- insert:
+    - id: community-ade
+      name: '@community/dsh-plugin-ade'
+      inject:
+        - workspaceRegistry
+        - sessions
