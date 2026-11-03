@@ -1297,6 +1297,76 @@ function restorePersistedSplit() {
   } catch (_) {}
 }
 
+function adeIcon(type, size) {
+  const px = size || 12;
+  const style = { flex: '0 0 auto', width: px, height: px };
+  const stroke = { stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round', strokeLinejoin: 'round' };
+  switch (type) {
+    case 'chevron-right':
+      return React.createElement(
+        'svg', { width: px, height: px, viewBox: '0 0 14 14', fill: 'none', style },
+        React.createElement('path', { d: 'M5 2.5 9.5 7l-4.5 4.5', ...stroke })
+      );
+    case 'chevron-down':
+      return React.createElement(
+        'svg', { width: px, height: px, viewBox: '0 0 14 14', fill: 'none', style },
+        React.createElement('path', { d: 'M2.5 5 7 9.5 11.5 5', ...stroke })
+      );
+    case 'close':
+      return React.createElement(
+        'svg', { width: px, height: px, viewBox: '0 0 14 14', fill: 'none', style },
+        React.createElement('path', { d: 'M3 3l8 8M11 3l-8 8', ...stroke })
+      );
+    case 'plus':
+      return React.createElement(
+        'svg', { width: px, height: px, viewBox: '0 0 14 14', fill: 'none', style },
+        React.createElement('path', { d: 'M7 3v8M3 7h8', ...stroke })
+      );
+    case 'zap':
+      return React.createElement(
+        'svg', { width: px, height: px, viewBox: '0 0 14 14', fill: 'currentColor', style },
+        React.createElement('path', { d: 'M8 1.5 3 8h3.2l-.8 4.5L11 6H7.8L8 1.5Z' })
+      );
+    case 'diamond':
+      return React.createElement(
+        'svg', { width: px, height: px, viewBox: '0 0 14 14', fill: 'none', style },
+        React.createElement('path', { d: 'M7 2.5l4.5 5L7 11.5 2.5 7.5 7 2.5Z', ...stroke })
+      );
+    case 'check':
+      return React.createElement(
+        'svg', { width: px, height: px, viewBox: '0 0 14 14', fill: 'none', style },
+        React.createElement('path', { d: 'M3 7.5l2.5 2.5L11 4.5', ...stroke })
+      );
+    case 'popout':
+      return React.createElement(
+        'svg', { width: px, height: px, viewBox: '0 0 14 14', fill: 'none', style },
+        React.createElement('path', { d: 'M5.5 3.5h-2a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2', ...stroke }),
+        React.createElement('path', { d: 'M9 3.5h1.5v1.5', ...stroke }),
+        React.createElement('path', { d: 'M10.5 3.5 6.5 7.5', ...stroke })
+      );
+    case 'stack':
+      return React.createElement(
+        'svg', { width: px, height: px, viewBox: '0 0 14 14', fill: 'none', style },
+        React.createElement('path', { d: 'M2.5 4.5h9M2.5 7h9M2.5 9.5h9', ...stroke }),
+        React.createElement('rect', { x: 2.5, y: 2.5, width: 9, height: 9, rx: 1.5, stroke: 'currentColor', strokeWidth: 1.3, fill: 'none' })
+      );
+    case 'split-rows':
+      return React.createElement(
+        'svg', { width: px, height: px, viewBox: '0 0 14 14', fill: 'none', style },
+        React.createElement('rect', { x: 1.5, y: 1, width: 11, height: 5.2, rx: 1.5, stroke: 'currentColor', strokeWidth: 1.2, fill: 'currentColor', fillOpacity: 0.18 }),
+        React.createElement('rect', { x: 1.5, y: 7.8, width: 11, height: 5.2, rx: 1.5, stroke: 'currentColor', strokeWidth: 1.2, fill: 'currentColor', fillOpacity: 0.18 })
+      );
+    case 'split-cols':
+      return React.createElement(
+        'svg', { width: px, height: px, viewBox: '0 0 14 14', fill: 'none', style },
+        React.createElement('rect', { x: 1, y: 1.5, width: 5.2, height: 11, rx: 1.5, stroke: 'currentColor', strokeWidth: 1.2, fill: 'currentColor', fillOpacity: 0.18 }),
+        React.createElement('rect', { x: 7.8, y: 1.5, width: 5.2, height: 11, rx: 1.5, stroke: 'currentColor', strokeWidth: 1.2, fill: 'currentColor', fillOpacity: 0.18 })
+      );
+    default:
+      return null;
+  }
+}
+
 function renderLayoutIcon(type) {
   switch (type) {
     case 'col-2':
@@ -1458,7 +1528,11 @@ function ADELayoutsSection(props) {
             textTransform: 'uppercase',
           },
         },
-        React.createElement('span', { style: { fontSize: 9, display: 'inline-block', width: 12, textAlign: 'center' } }, collapsed ? '▶' : '▼'),
+        React.createElement(
+  'span',
+  { style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 12, height: 12 } },
+  adeIcon(collapsed ? 'chevron-right' : 'chevron-down', 10)
+),
         React.createElement('span', null, 'LAYOUTS'),
         React.createElement(
           'span',
@@ -1495,7 +1569,11 @@ function ADELayoutsSection(props) {
                 gap: 3,
               },
             },
-            React.createElement('span', { style: { fontSize: 13, lineHeight: 1, fontWeight: 700 } }, isNaming ? '✕' : '+'),
+            React.createElement(
+              'span',
+              { style: { display: 'inline-flex', alignItems: 'center' } },
+              adeIcon(isNaming ? 'close' : 'plus', 11)
+            ),
             React.createElement('span', null, isNaming ? 'Cancel' : 'Save')
           )
         : null
@@ -1540,7 +1618,7 @@ function ADELayoutsSection(props) {
                     title: 'Cancel',
                     onClick: handleCancelSave,
                   },
-                  '✕'
+                  adeIcon('close', 11)
                 )
               )
             : null,
@@ -1583,7 +1661,7 @@ function ADELayoutsSection(props) {
             React.createElement(
               'div',
               { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-              React.createElement('span', { style: { fontSize: 11, color: autosplit ? '#38bdf8' : 'var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.4))' } }, '⚡'),
+              React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', color: autosplit ? '#38bdf8' : 'var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.4))' } }, adeIcon('zap', 11)),
               React.createElement('span', { style: { fontWeight: 500 } }, 'Auto-split Subagents')
             ),
             React.createElement(
@@ -1676,7 +1754,7 @@ function ADELayoutsSection(props) {
                           lineHeight: 1,
                         },
                       },
-                      '✕'
+                      adeIcon('close', 11)
                     )
                   )
                 );
@@ -1809,7 +1887,7 @@ function ADEPaneTelemetryReader(props) {
           animation: 'ade-pulse 2s ease-in-out infinite',
         },
       },
-      React.createElement('span', { style: { fontSize: 10 } }, '◆'),
+      React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center' } }, adeIcon('diamond', 10)),
       React.createElement('span', { style: { letterSpacing: '0.03em' } }, 'ATTENTION')
     );
   }
@@ -1836,7 +1914,7 @@ function ADEPaneTelemetryReader(props) {
           userSelect: 'none',
         },
       },
-      React.createElement('span', { style: { fontSize: 11, fontWeight: 900 } }, '✓'),
+      React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center' } }, adeIcon('check', 11)),
       React.createElement('span', { style: { letterSpacing: '0.03em' } }, 'READY')
     );
   }
@@ -1937,7 +2015,7 @@ function ADESubagentKidActions(props) {
           },
           'data-ade-popout': '',
           onClick: (e) => { e.stopPropagation(); onPopOut(childId); },
-        }, '⤢')
+        }, adeIcon('popout', 10))
       : null
   );
 }
@@ -2068,7 +2146,7 @@ function ADESubagentDeck(props) {
         },
         'data-ade-dismiss-deck': '',
         onClick: onDismiss,
-      }, '✕')
+      }, adeIcon('close', 11))
     )
   );
 }
@@ -2104,7 +2182,7 @@ function ADESubagentParentBadge(props) {
         fontVariantNumeric: 'tabular-nums',
       },
     },
-    '⧉ ',
+    adeIcon('stack', 12),
     String(children.length)
   );
 }
@@ -2473,14 +2551,14 @@ function ADESplitPaneItem(props) {
         draggable: false,
         onDragStart: (e) => e.preventDefault(),
         onClick: () => togglePaneSplit(pane.sessionId),
-      }, splitDirection === 'col' ? '⇄' : '⇅'),
+      }, adeIcon(splitDirection === 'col' ? 'split-cols' : 'split-rows', 12)),
       React.createElement('button', {
         style: closeButtonStyle,
         'aria-label': 'Close pane',
         draggable: false,
         onDragStart: (e) => e.preventDefault(),
         onClick: () => closePane(pane.sessionId),
-      }, '×')
+      }, adeIcon('close', 12))
     ),
     stackChildren.length > 0
       ? React.createElement(ADESubagentDeck, {

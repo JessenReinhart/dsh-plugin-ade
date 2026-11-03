@@ -1581,6 +1581,86 @@ function restorePersistedSplit() {
   } catch (_) {
   }
 }
+function adeIcon(type, size) {
+  const px = size || 12;
+  const style = { flex: "0 0 auto", width: px, height: px };
+  const stroke = { stroke: "currentColor", strokeWidth: 1.3, strokeLinecap: "round", strokeLinejoin: "round" };
+  switch (type) {
+    case "chevron-right":
+      return import_react.default.createElement(
+        "svg",
+        { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
+        import_react.default.createElement("path", { d: "M5 2.5 9.5 7l-4.5 4.5", ...stroke })
+      );
+    case "chevron-down":
+      return import_react.default.createElement(
+        "svg",
+        { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
+        import_react.default.createElement("path", { d: "M2.5 5 7 9.5 11.5 5", ...stroke })
+      );
+    case "close":
+      return import_react.default.createElement(
+        "svg",
+        { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
+        import_react.default.createElement("path", { d: "M3 3l8 8M11 3l-8 8", ...stroke })
+      );
+    case "plus":
+      return import_react.default.createElement(
+        "svg",
+        { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
+        import_react.default.createElement("path", { d: "M7 3v8M3 7h8", ...stroke })
+      );
+    case "zap":
+      return import_react.default.createElement(
+        "svg",
+        { width: px, height: px, viewBox: "0 0 14 14", fill: "currentColor", style },
+        import_react.default.createElement("path", { d: "M8 1.5 3 8h3.2l-.8 4.5L11 6H7.8L8 1.5Z" })
+      );
+    case "diamond":
+      return import_react.default.createElement(
+        "svg",
+        { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
+        import_react.default.createElement("path", { d: "M7 2.5l4.5 5L7 11.5 2.5 7.5 7 2.5Z", ...stroke })
+      );
+    case "check":
+      return import_react.default.createElement(
+        "svg",
+        { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
+        import_react.default.createElement("path", { d: "M3 7.5l2.5 2.5L11 4.5", ...stroke })
+      );
+    case "popout":
+      return import_react.default.createElement(
+        "svg",
+        { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
+        import_react.default.createElement("path", { d: "M5.5 3.5h-2a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2", ...stroke }),
+        import_react.default.createElement("path", { d: "M9 3.5h1.5v1.5", ...stroke }),
+        import_react.default.createElement("path", { d: "M10.5 3.5 6.5 7.5", ...stroke })
+      );
+    case "stack":
+      return import_react.default.createElement(
+        "svg",
+        { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
+        import_react.default.createElement("path", { d: "M2.5 4.5h9M2.5 7h9M2.5 9.5h9", ...stroke }),
+        import_react.default.createElement("rect", { x: 2.5, y: 2.5, width: 9, height: 9, rx: 1.5, stroke: "currentColor", strokeWidth: 1.3, fill: "none" })
+      );
+    case "split-rows":
+      return import_react.default.createElement(
+        "svg",
+        { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
+        import_react.default.createElement("rect", { x: 1.5, y: 1, width: 11, height: 5.2, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
+        import_react.default.createElement("rect", { x: 1.5, y: 7.8, width: 11, height: 5.2, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 })
+      );
+    case "split-cols":
+      return import_react.default.createElement(
+        "svg",
+        { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
+        import_react.default.createElement("rect", { x: 1, y: 1.5, width: 5.2, height: 11, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
+        import_react.default.createElement("rect", { x: 7.8, y: 1.5, width: 5.2, height: 11, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 })
+      );
+    default:
+      return null;
+  }
+}
 function renderLayoutIcon(type) {
   switch (type) {
     case "col-2":
@@ -1730,7 +1810,11 @@ function ADELayoutsSection(props) {
             textTransform: "uppercase"
           }
         },
-        import_react.default.createElement("span", { style: { fontSize: 9, display: "inline-block", width: 12, textAlign: "center" } }, collapsed ? "\u25B6" : "\u25BC"),
+        import_react.default.createElement(
+          "span",
+          { style: { display: "inline-flex", alignItems: "center", justifyContent: "center", width: 12, height: 12 } },
+          adeIcon(collapsed ? "chevron-right" : "chevron-down", 10)
+        ),
         import_react.default.createElement("span", null, "LAYOUTS"),
         import_react.default.createElement(
           "span",
@@ -1766,7 +1850,11 @@ function ADELayoutsSection(props) {
             gap: 3
           }
         },
-        import_react.default.createElement("span", { style: { fontSize: 13, lineHeight: 1, fontWeight: 700 } }, isNaming ? "\u2715" : "+"),
+        import_react.default.createElement(
+          "span",
+          { style: { display: "inline-flex", alignItems: "center" } },
+          adeIcon(isNaming ? "close" : "plus", 11)
+        ),
         import_react.default.createElement("span", null, isNaming ? "Cancel" : "Save")
       ) : null
     ),
@@ -1808,7 +1896,7 @@ function ADELayoutsSection(props) {
             title: "Cancel",
             onClick: handleCancelSave
           },
-          "\u2715"
+          adeIcon("close", 11)
         )
       ) : null,
       import_react.default.createElement(
@@ -1850,7 +1938,7 @@ function ADELayoutsSection(props) {
         import_react.default.createElement(
           "div",
           { style: { display: "flex", alignItems: "center", gap: 6 } },
-          import_react.default.createElement("span", { style: { fontSize: 11, color: autosplit ? "#38bdf8" : "var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.4))" } }, "\u26A1"),
+          import_react.default.createElement("span", { style: { display: "inline-flex", alignItems: "center", color: autosplit ? "#38bdf8" : "var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.4))" } }, adeIcon("zap", 11)),
           import_react.default.createElement("span", { style: { fontWeight: 500 } }, "Auto-split Subagents")
         ),
         import_react.default.createElement(
@@ -1942,7 +2030,7 @@ function ADELayoutsSection(props) {
                   lineHeight: 1
                 }
               },
-              "\u2715"
+              adeIcon("close", 11)
             )
           )
         );
@@ -2066,7 +2154,7 @@ function ADEPaneTelemetryReader(props) {
           animation: "ade-pulse 2s ease-in-out infinite"
         }
       },
-      import_react.default.createElement("span", { style: { fontSize: 10 } }, "\u25C6"),
+      import_react.default.createElement("span", { style: { display: "inline-flex", alignItems: "center" } }, adeIcon("diamond", 10)),
       import_react.default.createElement("span", { style: { letterSpacing: "0.03em" } }, "ATTENTION")
     );
   }
@@ -2092,7 +2180,7 @@ function ADEPaneTelemetryReader(props) {
           userSelect: "none"
         }
       },
-      import_react.default.createElement("span", { style: { fontSize: 11, fontWeight: 900 } }, "\u2713"),
+      import_react.default.createElement("span", { style: { display: "inline-flex", alignItems: "center" } }, adeIcon("check", 11)),
       import_react.default.createElement("span", { style: { letterSpacing: "0.03em" } }, "READY")
     );
   }
@@ -2189,7 +2277,7 @@ function ADESubagentKidActions(props) {
         e.stopPropagation();
         onPopOut(childId);
       }
-    }, "\u2922") : null
+    }, adeIcon("popout", 10)) : null
   );
 }
 function ADESubagentDeck(props) {
@@ -2310,7 +2398,7 @@ function ADESubagentDeck(props) {
         },
         "data-ade-dismiss-deck": "",
         onClick: onDismiss
-      }, "\u2715")
+      }, adeIcon("close", 11))
     )
   );
 }
@@ -2345,7 +2433,7 @@ function ADESubagentParentBadge(props) {
         fontVariantNumeric: "tabular-nums"
       }
     },
-    "\u29C9 ",
+    adeIcon("stack", 12),
     String(children.length)
   );
 }
@@ -2697,14 +2785,14 @@ function ADESplitPaneItem(props) {
         draggable: false,
         onDragStart: (e) => e.preventDefault(),
         onClick: () => togglePaneSplit2(pane.sessionId)
-      }, splitDirection === "col" ? "\u21C4" : "\u21C5"),
+      }, adeIcon(splitDirection === "col" ? "split-cols" : "split-rows", 12)),
       import_react.default.createElement("button", {
         style: closeButtonStyle,
         "aria-label": "Close pane",
         draggable: false,
         onDragStart: (e) => e.preventDefault(),
         onClick: () => closePane(pane.sessionId)
-      }, "\xD7")
+      }, adeIcon("close", 12))
     ),
     stackChildren.length > 0 ? import_react.default.createElement(ADESubagentDeck, {
       parentId: paneParentId,
