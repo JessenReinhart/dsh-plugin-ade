@@ -15,6 +15,8 @@
 - **Scoped Split Orientation Toggle** — Toggle horizontal (`⇄`) and vertical (`⇅`) split orientation per immediate split pair without resetting sibling panes.
 - **Flat Positioned Layout Engine** — Panes render as flat sibling nodes (`computeTreeGeometry`) so splitting, reordering, or resizing never unmounts active React trees or composer inputs.
 - **Glassmorphism & Motion Lab Compatible** — Preserves full backdrop-filter sampling across composers and slash command menus.
+- **Saved Layout Presets & Persistence** — Pin named multi-pane layouts in a new **Layouts** sidebar section above Workspaces. Tap one-click presets (**Side by Side**, **Stacked**, **Master + Stack**, **Quad Grid**), save the current split under a custom name, or delete saved layouts. The active tree auto-restores on restart.
+- **Live Agent Status Pills** — Each pane header shows a real-time **RUNNING** timer while the session is executing and an attention pulse for pending input, plus a **READY** completion pill when a reply is waiting.
 
 ---
 
