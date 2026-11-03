@@ -312,6 +312,7 @@ function ADENodeGraphCanvas(props) {
   const {
     sessionsSnapshot,
     currentSessionId,
+    layoutSessionIds,
     onOpenSession,
     onSplitSession,
     onForkSession,
@@ -320,12 +321,14 @@ function ADENodeGraphCanvas(props) {
     ensureReference: ensureReference2,
     workspaceOf: workspaceOf2
   } = props;
+  const layoutIds = Array.isArray(layoutSessionIds) ? layoutSessionIds.filter((id) => id && typeof id === "string") : [];
+  const layoutIdSet = (0, import_react.useMemo)(() => new Set(layoutIds), [layoutIds.join("\0")]);
   const [savedPositions, setSavedPositions] = (0, import_react.useState)(() => getStoredPositions());
   const [transform, setTransform] = (0, import_react.useState)({ x: 50, y: 50, k: 0.88 });
   const [selectedNodeId, setSelectedNodeId] = (0, import_react.useState)(currentSessionId || null);
   const [expandedChatNodeIds, setExpandedChatNodeIds] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
   const [closingChatNodeIds, setClosingChatNodeIds] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
-  const [filterMode, setFilterMode] = (0, import_react.useState)("all");
+  const [filterMode, setFilterMode] = (0, import_react.useState)(() => layoutIds.length >= 2 ? "layout" : "all");
   const [searchQuery, setSearchQuery] = (0, import_react.useState)("");
   const containerRef = (0, import_react.useRef)(null);
   const isPanningRef = (0, import_react.useRef)(false);
@@ -339,18 +342,38 @@ function ADENodeGraphCanvas(props) {
   const positions = (0, import_react.useMemo)(() => {
     return computeGraphLayout(graphData.nodes, graphData.edges, graphData.workspaces, savedPositions);
   }, [graphData.nodes, graphData.edges, graphData.workspaces, savedPositions]);
+  const layoutNodeIds = (0, import_react.useMemo)(() => {
+    if (layoutIdSet.size === 0) return layoutIdSet;
+    const childrenOf = /* @__PURE__ */ new Map();
+    for (const edge of graphData.edges) {
+      if (!childrenOf.has(edge.from)) childrenOf.set(edge.from, []);
+      childrenOf.get(edge.from).push(edge.to);
+    }
+    const out = new Set(layoutIdSet);
+    const stack = [...layoutIdSet];
+    while (stack.length > 0) {
+      const parentId = stack.pop();
+      for (const childId of childrenOf.get(parentId) || []) {
+        if (out.has(childId)) continue;
+        out.add(childId);
+        stack.push(childId);
+      }
+    }
+    return out;
+  }, [layoutIdSet, graphData.edges]);
   const visibleNodes = (0, import_react.useMemo)(() => {
     return graphData.nodes.filter((node) => {
       if (filterMode === "running" && !node.running) return false;
       if (filterMode === "subagents" && !node.isSubagent) return false;
       if (filterMode === "forks" && !node.isFork) return false;
+      if (filterMode === "layout" && !layoutNodeIds.has(node.id)) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         return node.title.toLowerCase().includes(q) || node.id.toLowerCase().includes(q) || node.workspaceTitle.toLowerCase().includes(q);
       }
       return true;
     });
-  }, [graphData.nodes, filterMode, searchQuery]);
+  }, [graphData.nodes, filterMode, searchQuery, layoutNodeIds]);
   const visibleNodeIds = (0, import_react.useMemo)(() => new Set(visibleNodes.map((n) => n.id)), [visibleNodes]);
   const visibleEdges = (0, import_react.useMemo)(() => {
     return graphData.edges.filter(
@@ -639,20 +662,28 @@ function ADENodeGraphCanvas(props) {
               fontVariantNumeric: "tabular-nums"
             }
           },
-          `${visibleNodes.length} nodes \u2022 ${graphData.workspaces.length} workspace groups`
+          filterMode === "layout" ? `${visibleNodes.length} nodes in layout \u2022 ${layoutIds.length} panes + ${Math.max(layoutNodeIds.size - layoutIds.length, 0)} linked branches` : `${visibleNodes.length} nodes \u2022 ${graphData.workspaces.length} workspace groups`
         )
       ),
       import_react.default.createElement(
         "div",
         { style: { display: "flex", alignItems: "center", gap: 6 } },
-        ["all", "running", "subagents", "forks"].map((f) => {
-          const active = filterMode === f;
+        [
+          ...layoutIds.length > 0 ? [{ id: "layout", label: `Layout ${layoutIds.length}`, title: "Only sessions mounted in the active multi-pane layout plus their linked subagents and forks" }] : [],
+          { id: "all", label: "All" },
+          { id: "running", label: "Running" },
+          { id: "subagents", label: "Subagents" },
+          { id: "forks", label: "Forks" }
+        ].map((filter) => {
+          const active = filterMode === filter.id;
           return import_react.default.createElement(
             "button",
             {
-              key: f,
+              key: filter.id,
               type: "button",
-              onClick: () => setFilterMode(f),
+              title: filter.title,
+              "data-ade-graph-filter": filter.id,
+              onClick: () => setFilterMode(filter.id),
               style: {
                 background: active ? "oklch(0.28 0.04 250)" : "transparent",
                 border: active ? "1px solid oklch(0.45 0.1 250)" : "1px solid transparent",
@@ -661,11 +692,10 @@ function ADENodeGraphCanvas(props) {
                 padding: "3px 8px",
                 fontSize: 11,
                 fontWeight: active ? 600 : 500,
-                cursor: "pointer",
-                textTransform: "capitalize"
+                cursor: "pointer"
               }
             },
-            f
+            filter.label
           );
         }),
         import_react.default.createElement("input", {
@@ -1019,6 +1049,11 @@ function ADENodeGraphCanvas(props) {
           badgeBg = "oklch(0.24 0.08 300 / 0.4)";
           badgeFg = "oklch(0.75 0.18 300)";
           badgeText = "FORK";
+        }
+        if (layoutIdSet.has(node.id)) {
+          badgeBg = "oklch(0.26 0.07 85 / 0.5)";
+          badgeFg = "oklch(0.82 0.13 85)";
+          badgeText = node.isSubagent ? "PANE \xB7 SUBAGENT" : node.isFork ? "PANE \xB7 FORK" : "PANE";
         }
         const sessionRef = isExpanded && ensureReference2 ? ensureReference2(node.id) : null;
         return import_react.default.createElement(
@@ -2401,6 +2436,14 @@ function disposeSubagentRowAction() {
 function ADENodeGraphViewWrapper(props) {
   const sessionId = props && props.sessionId ? props.sessionId : currentMainSessionId();
   const sessionsSnapshot = (0, import_react2.useSyncExternalStore)(subscribeSubagent, () => readSessionsSnapshot());
+  const layoutPanesSnapshot = (0, import_react2.useSyncExternalStore)(subscribe, getSnapshot);
+  const layoutSessionIds = import_react2.default.useMemo(() => {
+    const tree = layoutPanesSnapshot && layoutPanesSnapshot.tree;
+    const panes = layoutPanesSnapshot && layoutPanesSnapshot.panes;
+    if (tree) return getTreePaneIds(tree.root);
+    if (panes && panes.length > 0) return panes.map((pane) => pane.sessionId).filter(Boolean);
+    return [];
+  }, [layoutPanesSnapshot]);
   const onOpenSession = (id) => {
     if (!id) return;
     try {
@@ -2453,6 +2496,7 @@ function ADENodeGraphViewWrapper(props) {
   return import_react2.default.createElement(ADENodeGraphCanvas, {
     sessionsSnapshot,
     currentSessionId: sessionId,
+    layoutSessionIds,
     onOpenSession,
     onSplitSession,
     onForkSession,

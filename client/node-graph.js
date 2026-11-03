@@ -327,6 +327,7 @@ export function ADENodeGraphCanvas(props) {
   const {
     sessionsSnapshot,
     currentSessionId,
+    layoutSessionIds,
     onOpenSession,
     onSplitSession,
     onForkSession,
@@ -336,12 +337,17 @@ export function ADENodeGraphCanvas(props) {
     workspaceOf,
   } = props;
 
+  const layoutIds = Array.isArray(layoutSessionIds)
+    ? layoutSessionIds.filter((id) => id && typeof id === 'string')
+    : [];
+  const layoutIdSet = useMemo(() => new Set(layoutIds), [layoutIds.join('\u0000')]);
+
   const [savedPositions, setSavedPositions] = useState(() => getStoredPositions());
   const [transform, setTransform] = useState({ x: 50, y: 50, k: 0.88 });
   const [selectedNodeId, setSelectedNodeId] = useState(currentSessionId || null);
   const [expandedChatNodeIds, setExpandedChatNodeIds] = useState(() => new Set());
   const [closingChatNodeIds, setClosingChatNodeIds] = useState(() => new Set());
-  const [filterMode, setFilterMode] = useState('all');
+  const [filterMode, setFilterMode] = useState(() => (layoutIds.length >= 2 ? 'layout' : 'all'));
   const [searchQuery, setSearchQuery] = useState('');
 
   const containerRef = useRef(null);
@@ -359,11 +365,32 @@ export function ADENodeGraphCanvas(props) {
     return computeGraphLayout(graphData.nodes, graphData.edges, graphData.workspaces, savedPositions);
   }, [graphData.nodes, graphData.edges, graphData.workspaces, savedPositions]);
 
+  const layoutNodeIds = useMemo(() => {
+    if (layoutIdSet.size === 0) return layoutIdSet;
+    const childrenOf = new Map();
+    for (const edge of graphData.edges) {
+      if (!childrenOf.has(edge.from)) childrenOf.set(edge.from, []);
+      childrenOf.get(edge.from).push(edge.to);
+    }
+    const out = new Set(layoutIdSet);
+    const stack = [...layoutIdSet];
+    while (stack.length > 0) {
+      const parentId = stack.pop();
+      for (const childId of childrenOf.get(parentId) || []) {
+        if (out.has(childId)) continue;
+        out.add(childId);
+        stack.push(childId);
+      }
+    }
+    return out;
+  }, [layoutIdSet, graphData.edges]);
+
   const visibleNodes = useMemo(() => {
     return graphData.nodes.filter((node) => {
       if (filterMode === 'running' && !node.running) return false;
       if (filterMode === 'subagents' && !node.isSubagent) return false;
       if (filterMode === 'forks' && !node.isFork) return false;
+      if (filterMode === 'layout' && !layoutNodeIds.has(node.id)) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         return (
@@ -374,7 +401,7 @@ export function ADENodeGraphCanvas(props) {
       }
       return true;
     });
-  }, [graphData.nodes, filterMode, searchQuery]);
+  }, [graphData.nodes, filterMode, searchQuery, layoutNodeIds]);
 
   const visibleNodeIds = useMemo(() => new Set(visibleNodes.map((n) => n.id)), [visibleNodes]);
 
@@ -691,20 +718,30 @@ export function ADENodeGraphCanvas(props) {
               fontVariantNumeric: 'tabular-nums',
             },
           },
-          `${visibleNodes.length} nodes • ${graphData.workspaces.length} workspace groups`
+          filterMode === 'layout'
+            ? `${visibleNodes.length} nodes in layout • ${layoutIds.length} panes + ${Math.max(layoutNodeIds.size - layoutIds.length, 0)} linked branches`
+            : `${visibleNodes.length} nodes • ${graphData.workspaces.length} workspace groups`
         )
       ),
       React.createElement(
         'div',
         { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-        ['all', 'running', 'subagents', 'forks'].map((f) => {
-          const active = filterMode === f;
+        [
+          ...(layoutIds.length > 0 ? [{ id: 'layout', label: `Layout ${layoutIds.length}`, title: 'Only sessions mounted in the active multi-pane layout plus their linked subagents and forks' }] : []),
+          { id: 'all', label: 'All' },
+          { id: 'running', label: 'Running' },
+          { id: 'subagents', label: 'Subagents' },
+          { id: 'forks', label: 'Forks' },
+        ].map((filter) => {
+          const active = filterMode === filter.id;
           return React.createElement(
             'button',
             {
-              key: f,
+              key: filter.id,
               type: 'button',
-              onClick: () => setFilterMode(f),
+              title: filter.title,
+              'data-ade-graph-filter': filter.id,
+              onClick: () => setFilterMode(filter.id),
               style: {
                 background: active ? 'oklch(0.28 0.04 250)' : 'transparent',
                 border: active ? '1px solid oklch(0.45 0.1 250)' : '1px solid transparent',
@@ -714,10 +751,9 @@ export function ADENodeGraphCanvas(props) {
                 fontSize: 11,
                 fontWeight: active ? 600 : 500,
                 cursor: 'pointer',
-                textTransform: 'capitalize',
               },
             },
-            f
+            filter.label
           );
         }),
         React.createElement('input', {
@@ -1089,6 +1125,11 @@ export function ADENodeGraphCanvas(props) {
           badgeBg = 'oklch(0.24 0.08 300 / 0.4)';
           badgeFg = 'oklch(0.75 0.18 300)';
           badgeText = 'FORK';
+        }
+        if (layoutIdSet.has(node.id)) {
+          badgeBg = 'oklch(0.26 0.07 85 / 0.5)';
+          badgeFg = 'oklch(0.82 0.13 85)';
+          badgeText = node.isSubagent ? 'PANE · SUBAGENT' : node.isFork ? 'PANE · FORK' : 'PANE';
         }
 
         const sessionRef = isExpanded && ensureReference ? ensureReference(node.id) : null;

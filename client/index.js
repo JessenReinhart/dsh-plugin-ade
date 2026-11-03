@@ -727,6 +727,14 @@ function disposeSubagentRowAction() {
 function ADENodeGraphViewWrapper(props) {
   const sessionId = props && props.sessionId ? props.sessionId : currentMainSessionId();
   const sessionsSnapshot = useSyncExternalStore(subscribeSubagent, () => readSessionsSnapshot());
+  const layoutPanesSnapshot = useSyncExternalStore(subscribe, getSnapshot);
+  const layoutSessionIds = React.useMemo(() => {
+    const tree = layoutPanesSnapshot && layoutPanesSnapshot.tree;
+    const panes = layoutPanesSnapshot && layoutPanesSnapshot.panes;
+    if (tree) return getTreePaneIds(tree.root);
+    if (panes && panes.length > 0) return panes.map((pane) => pane.sessionId).filter(Boolean);
+    return [];
+  }, [layoutPanesSnapshot]);
 
   const onOpenSession = (id) => {
     if (!id) return;
@@ -785,6 +793,7 @@ function ADENodeGraphViewWrapper(props) {
   return React.createElement(ADENodeGraphCanvas, {
     sessionsSnapshot,
     currentSessionId: sessionId,
+    layoutSessionIds,
     onOpenSession,
     onSplitSession,
     onForkSession,
