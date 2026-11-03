@@ -1,5 +1,6 @@
 import React, { useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
+import { ADENodeGraphCanvas } from './node-graph.js';
 import {
   makeSplitId,
   normalizeSizes,
@@ -679,6 +680,8 @@ let cachedSessionProvider = null;
 let cachedUseSessionStatus = null;
 let aliasDispose = null;
 let subagentRowActionDispose = null;
+let graphViewDispose = null;
+let graphMainDispose = null;
 
 const expandedSessionIds = new Set();
 const expandedListeners = new Set();
@@ -719,6 +722,118 @@ function ensureSubagentRowActionRegistered() {
 function disposeSubagentRowAction() {
   try { subagentRowActionDispose?.(); } catch (_) {}
   subagentRowActionDispose = null;
+}
+
+function ADENodeGraphViewWrapper(props) {
+  const sessionId = props && props.sessionId ? props.sessionId : currentMainSessionId();
+  const sessionsSnapshot = useSyncExternalStore(subscribeSubagent, () => readSessionsSnapshot());
+
+  const onOpenSession = (id) => {
+    if (!id) return;
+    try {
+      if (app && app.uiWorkspace && typeof app.uiWorkspace.openSession === 'function') {
+        app.uiWorkspace.openSession(id);
+        return;
+      }
+    } catch (_) {
+      // fall through to panel select below
+    }
+    try {
+      if (app && app.layout && typeof app.layout.selectPanel === 'function') {
+        app.layout.selectPanel(null);
+      }
+    } catch (_) {}
+  };
+
+  const onSplitSession = (id) => {
+    if (!id) return;
+    try { ensureReference(id); } catch (_) {}
+    const firstId = state.panes && state.panes.length > 0
+      ? state.panes[0].sessionId
+      : currentMainSessionId();
+    const anchor = firstId && firstId !== id ? firstId : null;
+    let tree = state.tree && state.tree.root
+      ? state.tree
+      : anchor
+        ? { root: { kind: 'pane', id: anchor } }
+        : { root: { kind: 'pane', id } };
+    if (!anchor) {
+      tree = { root: { kind: 'pane', id } };
+    } else {
+      tree = insertOrSplit(tree, id, anchor, 'right');
+    }
+    setTree(tree);
+    try {
+      if (app && app.layout && typeof app.layout.selectPanel === 'function') {
+        app.layout.selectPanel(null);
+      }
+    } catch (_) {}
+  };
+
+  const onForkSession = (id) => {
+    if (!id) return;
+    try {
+      if (app && app.sessions && typeof app.sessions.fork === 'function') {
+        app.sessions.fork({ sessionId: id });
+      }
+    } catch (_) {}
+  };
+
+  return React.createElement(ADENodeGraphCanvas, {
+    sessionsSnapshot,
+    currentSessionId: sessionId,
+    onOpenSession,
+    onSplitSession,
+    onForkSession,
+  });
+}
+
+function ensureGraphViewRegistered() {
+  refreshHandles();
+  if (!app || !app.slots || !app.slots.register) return false;
+  try {
+    const entries = app.slots.entries('conversation.view') || [];
+    if (entries.some((entry) => entry && entry.options && entry.options.id === 'ade-node-graph')) return true;
+    graphViewDispose = app.slots.register(
+      {
+        name: 'conversation.view',
+        id: 'ade-node-graph',
+        order: 20,
+        label: 'Graph',
+      },
+      ADENodeGraphViewWrapper
+    );
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function ensureGraphMainRegistered() {
+  refreshHandles();
+  if (!app || !app.slots || !app.slots.register) return false;
+  try {
+    const entries = app.slots.entries('main') || [];
+    if (entries.some((entry) => entry && entry.options && entry.options.key === 'ade-node-graph')) return true;
+    graphMainDispose = app.slots.register(
+      {
+        name: 'main',
+        key: 'ade-node-graph',
+        label: 'Graph',
+      },
+      ADENodeGraphViewWrapper
+    );
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function disposeGraphRegistrations() {
+  try { graphViewDispose?.(); } catch (_) {}
+  try { graphMainDispose?.(); } catch (_) {}
+  graphViewDispose = null;
+  graphMainDispose = null;
 }
 
 function ensureAliasRegistered() {
@@ -885,6 +1000,10 @@ function injectMotionStyles() {
     const style = document.createElement('style');
     style.id = MOTION_STYLE_ID;
     style.textContent = `
+      @keyframes adeFlowPulse {
+        from { stroke-dashoffset: 24; }
+        to { stroke-dashoffset: 0; }
+      }
       @keyframes ade-hypr-pop-in {
         0% { opacity: 0; transform: scale(0.93); }
         60% { opacity: 1; transform: scale(1.012); }
@@ -1640,6 +1759,15 @@ function adeIcon(type, size) {
         React.createElement('circle', { cx: 11, cy: 3, r: 1.5, fill: 'currentColor' }),
         React.createElement('path', { d: 'M3 11 C 3 6.5, 5 6.5, 7 6.5 S 11 6.5, 11 3', ...stroke })
       );
+    case 'graph':
+      return React.createElement(
+        'svg',
+        { width: px, height: px, viewBox: '0 0 24 24', fill: 'none', style },
+        React.createElement('circle', { cx: 5, cy: 6, r: 2, stroke: 'currentColor', strokeWidth: 1.3 }),
+        React.createElement('circle', { cx: 19, cy: 6, r: 2, stroke: 'currentColor', strokeWidth: 1.3 }),
+        React.createElement('circle', { cx: 12, cy: 18, r: 2, stroke: 'currentColor', strokeWidth: 1.3 }),
+        React.createElement('path', { d: 'M7 7.5 10.5 16M17 7.5 13.5 16', ...stroke })
+      );
     default:
       return null;
   }
@@ -1827,34 +1955,77 @@ function ADELayoutsSection(props) {
           String(customLayouts.length)
         )
       ),
-      canSave
-        ? React.createElement(
-            'button',
-            {
-              type: 'button',
-              title: isNaming ? 'Cancel naming' : 'Save current split as a named layout',
-              onClick: isNaming ? handleCancelSave : handleStartSave,
-              style: {
-                background: isNaming ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
-                border: 'none',
-                color: 'var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.65))',
-                cursor: 'pointer',
-                padding: '2px 6px',
-                borderRadius: 'var(--dsw-radius-sm, 4px)',
-                fontSize: 11,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 3,
-              },
+      React.createElement(
+        'div',
+        {
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+          },
+        },
+        React.createElement(
+          'button',
+          {
+            type: 'button',
+            title: 'Open lineage graph canvas',
+            onClick: (e) => {
+              e.stopPropagation();
+              try {
+                if (app && app.layout && typeof app.layout.selectPanel === 'function') {
+                  app.layout.selectPanel('ade-node-graph');
+                }
+              } catch (_) {}
             },
-            React.createElement(
-              'span',
-              { style: { display: 'inline-flex', alignItems: 'center' } },
-              adeIcon(isNaming ? 'close' : 'plus', 11)
-            ),
-            React.createElement('span', null, isNaming ? 'Cancel' : 'Save')
-          )
-        : null
+            style: {
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.65))',
+              cursor: 'pointer',
+              padding: '2px 6px',
+              borderRadius: 'var(--dsw-radius-sm, 4px)',
+              fontSize: 11,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 3,
+            },
+          },
+          React.createElement(
+            'span',
+            { style: { display: 'inline-flex', alignItems: 'center' } },
+            adeIcon('graph', 11)
+          ),
+          React.createElement('span', null, 'Graph')
+        ),
+        canSave
+          ? React.createElement(
+              'button',
+              {
+                type: 'button',
+                title: isNaming ? 'Cancel naming' : 'Save current split as a named layout',
+                onClick: isNaming ? handleCancelSave : handleStartSave,
+                style: {
+                  background: isNaming ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
+                  border: 'none',
+                  color: 'var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.65))',
+                  cursor: 'pointer',
+                  padding: '2px 6px',
+                  borderRadius: 'var(--dsw-radius-sm, 4px)',
+                  fontSize: 11,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 3,
+                },
+              },
+              React.createElement(
+                'span',
+                { style: { display: 'inline-flex', alignItems: 'center' } },
+                adeIcon(isNaming ? 'close' : 'plus', 11)
+              ),
+              React.createElement('span', null, isNaming ? 'Cancel' : 'Save')
+            )
+          : null
+      )
     ),
     !collapsed
       ? React.createElement(
@@ -3005,7 +3176,7 @@ function ADESplitPaneItem(props) {
   const [isOpen, setIsOpen] = React.useState(isImmediatelyOpen);
 
   const paneElRef = React.useRef(null);
-  const [viewState, setViewState] = React.useState({ hasMultiple: false, isTrajectory: false });
+  const [viewState, setViewState] = React.useState({ hasMultiple: false, isTrajectory: false, isGraph: false });
 
   const inspectTabs = React.useCallback(() => {
     const paneEl = paneElRef.current;
@@ -3013,14 +3184,18 @@ function ADESplitPaneItem(props) {
     const tabButtons = Array.from(paneEl.querySelectorAll('[data-conversation-tabs] button[role="tab"], [role="tablist"] button[role="tab"]'));
     const hasMore = !!paneEl.querySelector('[aria-haspopup="menu"]');
     const trajectoryBtn = tabButtons.find((b) => ((b.textContent || '') + ' ' + (b.getAttribute('aria-label') || '')).toLowerCase().includes('trajectory')) || null;
+    const graphBtn = tabButtons.find((b) => ((b.textContent || '') + ' ' + (b.getAttribute('aria-label') || '')).toLowerCase().includes('graph')) || null;
     const chatBtn = tabButtons.find((b) => /^\s*chat\b/i.test((b.textContent || '').trim())) || tabButtons[0] || null;
     const activeBtn = tabButtons.find((b) => b.getAttribute('aria-selected') === 'true') || null;
     const hasMultiple = tabButtons.length > 1 || (tabButtons.length >= 1 && hasMore);
     const isTrajectory = trajectoryBtn
       ? trajectoryBtn.getAttribute('aria-selected') === 'true'
       : activeBtn && activeBtn !== chatBtn;
-    const next = { hasMultiple, isTrajectory: !!isTrajectory };
-    setViewState((prev) => (prev.hasMultiple === next.hasMultiple && prev.isTrajectory === next.isTrajectory ? prev : next));
+    const isGraph = graphBtn
+      ? graphBtn.getAttribute('aria-selected') === 'true'
+      : false;
+    const next = { hasMultiple, isTrajectory: !!isTrajectory, isGraph: !!isGraph };
+    setViewState((prev) => (prev.hasMultiple === next.hasMultiple && prev.isTrajectory === next.isTrajectory && prev.isGraph === next.isGraph ? prev : next));
   }, [pane.sessionId]);
 
   React.useEffect(() => {
@@ -3058,6 +3233,32 @@ function ADESplitPaneItem(props) {
       setTimeout(() => {
         const items = Array.from(document.querySelectorAll('[role="menu"] a, [role="menu"] button, [role="menuitem"], [role="listbox"] button'));
         const target = items.find((el) => (el.textContent || '').toLowerCase().includes('trajectory')) || items[0];
+        if (target) target.click();
+      }, 80);
+    }
+  };
+
+  const handleToggleGraph = () => {
+    const paneEl = paneElRef.current;
+    if (!paneEl) return;
+    const tabButtons = Array.from(paneEl.querySelectorAll('[data-conversation-tabs] button[role="tab"], [role="tablist"] button[role="tab"]'));
+    const graphBtn = tabButtons.find((b) => ((b.textContent || '') + ' ' + (b.getAttribute('aria-label') || '')).toLowerCase().includes('graph')) || null;
+    const chatBtn = tabButtons.find((b) => /^\s*chat\b/i.test((b.textContent || '').trim())) || tabButtons[0] || null;
+    if (graphBtn) {
+      if (graphBtn.getAttribute('aria-selected') === 'true') {
+        if (chatBtn) chatBtn.click();
+      } else {
+        graphBtn.click();
+      }
+      inspectTabs();
+      return;
+    }
+    const moreBtn = paneEl.querySelector('button[aria-haspopup="menu"]');
+    if (moreBtn && tabButtons.length >= 1) {
+      moreBtn.click();
+      setTimeout(() => {
+        const items = Array.from(document.querySelectorAll('[role="menu"] a, [role="menu"] button, [role="menuitem"], [role="listbox"] button'));
+        const target = items.find((el) => (el.textContent || '').toLowerCase().includes('graph')) || items[0];
         if (target) target.click();
       }, 80);
     }
@@ -3229,6 +3430,23 @@ function ADESplitPaneItem(props) {
             onClick: handleToggleTrajectory,
           }, adeIcon('trajectory', 12))
         : null,
+      viewState.hasMultiple
+        ? React.createElement('button', {
+            type: 'button',
+            style: {
+              ...closeButtonStyle,
+              color: viewState.isGraph
+                ? 'var(--dsw-alias-brand, #4f78ff)'
+                : 'var(--dsw-alias-fg-l3, rgba(255,255,255,0.45))',
+            },
+            'aria-label': viewState.isGraph ? 'Switch to chat view' : 'Switch to graph view',
+            title: viewState.isGraph ? 'Show chat' : 'Show graph',
+            'aria-pressed': viewState.isGraph,
+            draggable: false,
+            onDragStart: (e) => e.preventDefault(),
+            onClick: handleToggleGraph,
+          }, adeIcon('graph', 12))
+        : null,
       React.createElement('button', {
         type: 'button',
         style: { ...closeButtonStyle, fontWeight: 700 },
@@ -3353,11 +3571,15 @@ export function apply(ctx) {
   ensureSidebarWrapped();
   ensureAliasRegistered();
   ensureSubagentRowActionRegistered();
+  ensureGraphViewRegistered();
+  ensureGraphMainRegistered();
 
   if (pluginCtx && pluginCtx.slots && pluginCtx.slots.subscribe) {
     pluginCtx.slots.subscribe('sidebar.workspaces', ensureSidebarWrapped);
     pluginCtx.slots.subscribe('main', ensureConversationWrapped);
     pluginCtx.slots.subscribe('sidebar.workspaces.session.row.action', ensureSubagentRowActionRegistered);
+    pluginCtx.slots.subscribe('conversation.view', ensureGraphViewRegistered);
+    pluginCtx.slots.subscribe('main', ensureGraphMainRegistered);
   }
 
   restorePersistedSplit();
@@ -3688,6 +3910,7 @@ export function apply(ctx) {
       restoreSidebar();
       disposeAlias();
       disposeSubagentRowAction();
+      disposeGraphRegistrations();
       if (typeof unsub === 'function') unsub();
       if (typeof subagentUnsub === 'function') subagentUnsub();
       for (const id of [...retained.keys()]) releaseReference(id);
@@ -3707,6 +3930,7 @@ export function apply(ctx) {
     restoreSidebar();
     disposeAlias();
     disposeSubagentRowAction();
+    disposeGraphRegistrations();
     if (typeof subagentUnsub === 'function') subagentUnsub();
     for (const id of [...retained.keys()]) releaseReference(id);
     app = null;

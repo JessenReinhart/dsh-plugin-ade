@@ -38,8 +38,857 @@ __export(index_exports, {
   inject: () => inject
 });
 module.exports = __toCommonJS(index_exports);
-var import_react = __toESM(require("react"), 1);
+var import_react2 = __toESM(require("react"), 1);
 var import_react_dom = require("react-dom");
+
+// client/node-graph.js
+var import_react = __toESM(require("react"), 1);
+var STORAGE_POSITIONS_KEY = "dsh-ade-node-positions-v1";
+function getStoredPositions() {
+  try {
+    if (typeof localStorage === "undefined") return {};
+    const raw = localStorage.getItem(STORAGE_POSITIONS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (_) {
+    return {};
+  }
+}
+function storePositions(positions) {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(STORAGE_POSITIONS_KEY, JSON.stringify(positions));
+  } catch (_) {
+  }
+}
+function extractLineageGraph(snapshot) {
+  if (!snapshot || !snapshot.byId) {
+    return { nodes: [], edges: [] };
+  }
+  const byId = snapshot.byId;
+  const projections = snapshot.projectionsBySession || {};
+  const nodesMap = /* @__PURE__ */ new Map();
+  const edges = [];
+  for (const [id, summary] of Object.entries(byId)) {
+    if (!summary) continue;
+    const isSubagent = summary.origin === "subagent";
+    const parentId = summary.parentId || null;
+    const isFork = Boolean(parentId && !isSubagent);
+    const isRoot = !parentId || parentId === id;
+    nodesMap.set(id, {
+      id,
+      title: summary.title || (isSubagent ? `Subagent (${id.slice(0, 8)})` : `Session (${id.slice(0, 8)})`),
+      origin: summary.origin || (isFork ? "fork" : "user"),
+      parentId,
+      isSubagent,
+      isFork,
+      isRoot,
+      running: Boolean(summary.running),
+      updatedAt: summary.updatedAt || 0,
+      workspaceId: summary.workspaceId || null
+    });
+  }
+  for (const [parentId, proj] of Object.entries(projections)) {
+    const catalog = proj?.values?.subagentCatalog;
+    if (Array.isArray(catalog)) {
+      for (const entry of catalog) {
+        if (!entry || !entry.id) continue;
+        if (!nodesMap.has(entry.id)) {
+          nodesMap.set(entry.id, {
+            id: entry.id,
+            title: entry.label || `Subagent (${entry.id.slice(0, 8)})`,
+            origin: "subagent",
+            parentId,
+            isSubagent: true,
+            isFork: false,
+            isRoot: false,
+            running: Boolean(entry.running),
+            updatedAt: Date.now(),
+            workspaceId: null
+          });
+        }
+      }
+    }
+  }
+  for (const node of nodesMap.values()) {
+    if (node.parentId && nodesMap.has(node.parentId) && node.parentId !== node.id) {
+      edges.push({
+        id: `${node.parentId}->${node.id}`,
+        from: node.parentId,
+        to: node.id,
+        isSubagent: node.isSubagent,
+        isFork: node.isFork,
+        running: node.running
+      });
+    }
+  }
+  return {
+    nodes: Array.from(nodesMap.values()),
+    edges
+  };
+}
+function computeGraphLayout(nodes, edges, savedPositions = {}) {
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+  const childrenMap = /* @__PURE__ */ new Map();
+  const parentMap = /* @__PURE__ */ new Map();
+  for (const edge of edges) {
+    if (!childrenMap.has(edge.from)) childrenMap.set(edge.from, []);
+    childrenMap.get(edge.from).push(edge.to);
+    parentMap.set(edge.to, edge.from);
+  }
+  const rootIds = [];
+  for (const node of nodes) {
+    if (!parentMap.has(node.id)) {
+      rootIds.push(node.id);
+    }
+  }
+  rootIds.sort((a, b) => (nodeMap.get(b)?.updatedAt || 0) - (nodeMap.get(a)?.updatedAt || 0));
+  const depths = /* @__PURE__ */ new Map();
+  function assignDepth(nodeId, depth, visited = /* @__PURE__ */ new Set()) {
+    if (visited.has(nodeId)) return;
+    visited.add(nodeId);
+    depths.set(nodeId, Math.max(depths.get(nodeId) || 0, depth));
+    const kids = childrenMap.get(nodeId) || [];
+    for (const kid of kids) {
+      assignDepth(kid, depth + 1, visited);
+    }
+  }
+  for (const rootId of rootIds) {
+    assignDepth(rootId, 0);
+  }
+  let currentY = 80;
+  const positions = {};
+  for (const rootId of rootIds) {
+    let collectTree2 = function(id) {
+      if (visitedInTree.has(id)) return;
+      visitedInTree.add(id);
+      treeNodes.push(id);
+      const kids = childrenMap.get(id) || [];
+      for (const kid of kids) collectTree2(kid);
+    };
+    var collectTree = collectTree2;
+    const visitedInTree = /* @__PURE__ */ new Set();
+    const treeNodes = [];
+    collectTree2(rootId);
+    const byDepth = /* @__PURE__ */ new Map();
+    for (const id of treeNodes) {
+      const d = depths.get(id) || 0;
+      if (!byDepth.has(d)) byDepth.set(d, []);
+      byDepth.get(d).push(id);
+    }
+    let maxRows = 1;
+    for (const row of byDepth.values()) {
+      if (row.length > maxRows) maxRows = row.length;
+    }
+    const startY = currentY;
+    for (const [d, rowIds] of byDepth.entries()) {
+      rowIds.forEach((id, idx) => {
+        const autoX = 80 + d * 340;
+        const autoY = startY + idx * 140;
+        if (savedPositions && savedPositions[id]) {
+          positions[id] = savedPositions[id];
+        } else {
+          positions[id] = { x: autoX, y: autoY };
+        }
+      });
+    }
+    currentY += Math.max(maxRows * 140 + 60, 180);
+  }
+  for (const node of nodes) {
+    if (!positions[node.id]) {
+      if (savedPositions && savedPositions[node.id]) {
+        positions[node.id] = savedPositions[node.id];
+      } else {
+        positions[node.id] = { x: 80, y: currentY };
+        currentY += 150;
+      }
+    }
+  }
+  return positions;
+}
+function ADENodeGraphCanvas(props) {
+  const {
+    sessionsSnapshot,
+    currentSessionId,
+    onOpenSession,
+    onSplitSession,
+    onForkSession
+  } = props;
+  const [savedPositions, setSavedPositions] = (0, import_react.useState)(() => getStoredPositions());
+  const [transform, setTransform] = (0, import_react.useState)({ x: 40, y: 30, k: 0.9 });
+  const [selectedNodeId, setSelectedNodeId] = (0, import_react.useState)(currentSessionId || null);
+  const [filterMode, setFilterMode] = (0, import_react.useState)("all");
+  const [searchQuery, setSearchQuery] = (0, import_react.useState)("");
+  const containerRef = (0, import_react.useRef)(null);
+  const worldRef = (0, import_react.useRef)(null);
+  const isPanningRef = (0, import_react.useRef)(false);
+  const panStartRef = (0, import_react.useRef)({ x: 0, y: 0 });
+  const draggingNodeRef = (0, import_react.useRef)(null);
+  const dragOffsetRef = (0, import_react.useRef)({ x: 0, y: 0 });
+  const graphData = (0, import_react.useMemo)(() => {
+    return extractLineageGraph(sessionsSnapshot);
+  }, [sessionsSnapshot]);
+  const positions = (0, import_react.useMemo)(() => {
+    return computeGraphLayout(graphData.nodes, graphData.edges, savedPositions);
+  }, [graphData.nodes, graphData.edges, savedPositions]);
+  const visibleNodes = (0, import_react.useMemo)(() => {
+    return graphData.nodes.filter((node) => {
+      if (filterMode === "running" && !node.running) return false;
+      if (filterMode === "subagents" && !node.isSubagent) return false;
+      if (filterMode === "forks" && !node.isFork) return false;
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        return node.title.toLowerCase().includes(q) || node.id.toLowerCase().includes(q);
+      }
+      return true;
+    });
+  }, [graphData.nodes, filterMode, searchQuery]);
+  const visibleNodeIds = (0, import_react.useMemo)(() => new Set(visibleNodes.map((n) => n.id)), [visibleNodes]);
+  const visibleEdges = (0, import_react.useMemo)(() => {
+    return graphData.edges.filter(
+      (e) => visibleNodeIds.has(e.from) && visibleNodeIds.has(e.to)
+    );
+  }, [graphData.edges, visibleNodeIds]);
+  const handleRecenter = (0, import_react.useCallback)(() => {
+    if (visibleNodes.length === 0) {
+      setTransform({ x: 40, y: 40, k: 0.9 });
+      return;
+    }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const node of visibleNodes) {
+      const pos = positions[node.id] || { x: 80, y: 80 };
+      if (pos.x < minX) minX = pos.x;
+      if (pos.y < minY) minY = pos.y;
+      if (pos.x + 260 > maxX) maxX = pos.x + 260;
+      if (pos.y + 120 > maxY) maxY = pos.y + 120;
+    }
+    const container = containerRef.current;
+    if (!container) return;
+    const cw = container.clientWidth || 800;
+    const ch = container.clientHeight || 600;
+    const gw = Math.max(maxX - minX + 80, 400);
+    const gh = Math.max(maxY - minY + 80, 300);
+    const scale = Math.min(Math.max(Math.min((cw - 60) / gw, (ch - 60) / gh), 0.4), 1.2);
+    const cx = (cw - gw * scale) / 2 - minX * scale + 40;
+    const cy = (ch - gh * scale) / 2 - minY * scale + 40;
+    setTransform({ x: Math.round(cx), y: Math.round(cy), k: scale });
+  }, [visibleNodes, positions]);
+  const handleResetLayout = (0, import_react.useCallback)(() => {
+    storePositions({});
+    setSavedPositions({});
+    setTimeout(handleRecenter, 50);
+  }, [handleRecenter]);
+  const handleMouseDown = (e) => {
+    if (e.target.closest("[data-node-card]") || e.target.closest("[data-graph-toolbar]") || e.target.closest("[data-graph-drawer]")) {
+      return;
+    }
+    isPanningRef.current = true;
+    panStartRef.current = { x: e.clientX - transform.x, y: e.clientY - transform.y };
+  };
+  (0, import_react.useEffect)(() => {
+    const onMouseMove = (e) => {
+      if (isPanningRef.current) {
+        setTransform((prev) => ({
+          ...prev,
+          x: e.clientX - panStartRef.current.x,
+          y: e.clientY - panStartRef.current.y
+        }));
+      } else if (draggingNodeRef.current) {
+        const nodeId = draggingNodeRef.current;
+        const newX = Math.round((e.clientX - transform.x) / transform.k - dragOffsetRef.current.x);
+        const newY = Math.round((e.clientY - transform.y) / transform.k - dragOffsetRef.current.y);
+        setSavedPositions((prev) => {
+          const next = { ...prev, [nodeId]: { x: newX, y: newY } };
+          storePositions(next);
+          return next;
+        });
+      }
+    };
+    const onMouseUp = () => {
+      isPanningRef.current = false;
+      draggingNodeRef.current = null;
+    };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [transform]);
+  const handleWheel = (e) => {
+    e.preventDefault();
+    const zoomFactor = e.deltaY < 0 ? 1.09 : 0.91;
+    const newK = Math.min(Math.max(transform.k * zoomFactor, 0.35), 2.2);
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const newX = mx - (mx - transform.x) * (newK / transform.k);
+    const newY = my - (my - transform.y) * (newK / transform.k);
+    setTransform({ x: newX, y: newY, k: newK });
+  };
+  const selectedNode = (0, import_react.useMemo)(() => {
+    return graphData.nodes.find((n) => n.id === selectedNodeId) || null;
+  }, [graphData.nodes, selectedNodeId]);
+  const activeCount = (0, import_react.useMemo)(() => {
+    return graphData.nodes.filter((n) => n.running).length;
+  }, [graphData.nodes]);
+  return import_react.default.createElement(
+    "div",
+    {
+      ref: containerRef,
+      "data-ade-graph-canvas": "",
+      style: {
+        position: "relative",
+        width: "100%",
+        height: "100%",
+        overflow: "hidden",
+        background: "var(--dsw-alias-surface-canvas, oklch(0.12 0.012 260))",
+        backgroundImage: "radial-gradient(circle, oklch(0.28 0.02 260 / 0.45) 1px, transparent 1px)",
+        backgroundSize: "24px 24px",
+        userSelect: "none"
+      },
+      onMouseDown: handleMouseDown,
+      onWheel: handleWheel
+    },
+    // Top Glassmorphic Toolbar
+    import_react.default.createElement(
+      "div",
+      {
+        "data-graph-toolbar": "",
+        style: {
+          position: "absolute",
+          top: 12,
+          left: 14,
+          right: 14,
+          height: 40,
+          background: "oklch(0.16 0.018 260 / 0.85)",
+          backdropFilter: "blur(12px)",
+          border: "1px solid oklch(0.28 0.02 260)",
+          borderRadius: 8,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "0 12px",
+          zIndex: 40,
+          boxShadow: "0 4px 16px rgba(0,0,0,0.3)"
+        }
+      },
+      // Left tools: Title & Stats
+      import_react.default.createElement(
+        "div",
+        { style: { display: "flex", alignItems: "center", gap: 8 } },
+        import_react.default.createElement(
+          "span",
+          {
+            style: {
+              fontSize: 12.5,
+              fontWeight: 700,
+              letterSpacing: "-0.01em",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              color: "oklch(0.96 0.005 260)"
+            }
+          },
+          import_react.default.createElement(
+            "svg",
+            { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2 },
+            import_react.default.createElement("circle", { cx: 6, cy: 6, r: 3 }),
+            import_react.default.createElement("circle", { cx: 6, cy: 18, r: 3 }),
+            import_react.default.createElement("circle", { cx: 18, cy: 12, r: 3 }),
+            import_react.default.createElement("path", { d: "M9 7.5L15 10.5M9 16.5L15 13.5" })
+          ),
+          "Lineage Graph"
+        ),
+        import_react.default.createElement(
+          "span",
+          {
+            style: {
+              fontSize: 10.5,
+              fontFamily: "ui-monospace, monospace",
+              padding: "2px 6px",
+              borderRadius: 4,
+              background: "oklch(0.24 0.02 260)",
+              color: "oklch(0.72 0.02 260)",
+              border: "1px solid oklch(0.28 0.02 260)"
+            }
+          },
+          `${graphData.nodes.length} nodes`
+        ),
+        activeCount > 0 ? import_react.default.createElement(
+          "span",
+          {
+            style: {
+              fontSize: 10.5,
+              fontFamily: "ui-monospace, monospace",
+              padding: "2px 6px",
+              borderRadius: 4,
+              background: "oklch(0.24 0.04 145 / 0.3)",
+              color: "oklch(0.75 0.18 145)",
+              border: "1px solid oklch(0.4 0.1 145)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4
+            }
+          },
+          import_react.default.createElement("span", {
+            style: {
+              width: 6,
+              height: 6,
+              borderRadius: "50%",
+              background: "oklch(0.75 0.18 145)"
+            }
+          }),
+          `${activeCount} active`
+        ) : null
+      ),
+      // Filter & Search
+      import_react.default.createElement(
+        "div",
+        { style: { display: "flex", alignItems: "center", gap: 6 } },
+        import_react.default.createElement(
+          "div",
+          { style: { display: "flex", background: "oklch(0.22 0.02 260)", borderRadius: 5, padding: 2, border: "1px solid oklch(0.28 0.02 260)" } },
+          ["all", "running", "subagents", "forks"].map(
+            (f) => import_react.default.createElement(
+              "button",
+              {
+                key: f,
+                type: "button",
+                onClick: () => setFilterMode(f),
+                style: {
+                  background: filterMode === f ? "oklch(0.32 0.03 260)" : "transparent",
+                  color: filterMode === f ? "#fff" : "oklch(0.65 0.02 260)",
+                  border: "none",
+                  borderRadius: 4,
+                  padding: "2px 7px",
+                  fontSize: 10.5,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  textTransform: "capitalize"
+                }
+              },
+              f
+            )
+          )
+        ),
+        import_react.default.createElement("input", {
+          type: "text",
+          placeholder: "Search nodes...",
+          value: searchQuery,
+          onChange: (e) => setSearchQuery(e.target.value),
+          style: {
+            background: "oklch(0.2 0.02 260)",
+            border: "1px solid oklch(0.28 0.02 260)",
+            borderRadius: 5,
+            color: "oklch(0.95 0.005 260)",
+            fontSize: 11,
+            padding: "3px 8px",
+            width: 120,
+            outline: "none"
+          }
+        }),
+        import_react.default.createElement(
+          "button",
+          {
+            type: "button",
+            onClick: handleRecenter,
+            title: "Recenter canvas",
+            style: {
+              background: "oklch(0.24 0.02 260)",
+              border: "1px solid oklch(0.28 0.02 260)",
+              color: "oklch(0.85 0.01 260)",
+              borderRadius: 5,
+              padding: "3px 8px",
+              fontSize: 11,
+              fontWeight: 500,
+              cursor: "pointer"
+            }
+          },
+          "Recenter"
+        ),
+        import_react.default.createElement(
+          "button",
+          {
+            type: "button",
+            onClick: handleResetLayout,
+            title: "Reset auto layout",
+            style: {
+              background: "oklch(0.24 0.02 260)",
+              border: "1px solid oklch(0.28 0.02 260)",
+              color: "oklch(0.85 0.01 260)",
+              borderRadius: 5,
+              padding: "3px 8px",
+              fontSize: 11,
+              fontWeight: 500,
+              cursor: "pointer"
+            }
+          },
+          "Auto-Layout"
+        )
+      )
+    ),
+    // World Container (transforms pan/zoom)
+    import_react.default.createElement(
+      "div",
+      {
+        ref: worldRef,
+        "data-graph-world": "",
+        style: {
+          position: "absolute",
+          top: 0,
+          left: 0,
+          transformOrigin: "0 0",
+          transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.k})`,
+          width: 0,
+          height: 0
+        }
+      },
+      // SVG Wires Layer
+      import_react.default.createElement(
+        "svg",
+        {
+          style: {
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: 6e3,
+            height: 6e3,
+            pointerEvents: "none",
+            overflow: "visible"
+          }
+        },
+        import_react.default.createElement(
+          "defs",
+          null,
+          import_react.default.createElement(
+            "marker",
+            { id: "ade-wire-arrow", viewBox: "0 0 10 10", refX: 8, refY: 5, markerWidth: 6, markerHeight: 6, orient: "auto-start-reverse" },
+            import_react.default.createElement("path", { d: "M 0 1.5 L 8 5 L 0 8.5 z", fill: "oklch(0.42 0.04 260)" })
+          ),
+          import_react.default.createElement(
+            "marker",
+            { id: "ade-wire-arrow-subagent", viewBox: "0 0 10 10", refX: 8, refY: 5, markerWidth: 6, markerHeight: 6, orient: "auto-start-reverse" },
+            import_react.default.createElement("path", { d: "M 0 1.5 L 8 5 L 0 8.5 z", fill: "oklch(0.68 0.16 160)" })
+          ),
+          import_react.default.createElement(
+            "marker",
+            { id: "ade-wire-arrow-fork", viewBox: "0 0 10 10", refX: 8, refY: 5, markerWidth: 6, markerHeight: 6, orient: "auto-start-reverse" },
+            import_react.default.createElement("path", { d: "M 0 1.5 L 8 5 L 0 8.5 z", fill: "oklch(0.68 0.18 300)" })
+          )
+        ),
+        visibleEdges.map((edge) => {
+          const fromPos = positions[edge.from] || { x: 80, y: 80 };
+          const toPos = positions[edge.to] || { x: 420, y: 80 };
+          const startX = fromPos.x + 260;
+          const startY = fromPos.y + 48;
+          const endX = toPos.x;
+          const endY = toPos.y + 48;
+          const dx = Math.abs(endX - startX) * 0.55;
+          const d = `M ${startX} ${startY} C ${startX + dx} ${startY}, ${endX - dx} ${endY}, ${endX} ${endY}`;
+          let strokeColor = "oklch(0.38 0.03 260)";
+          let marker = "url(#ade-wire-arrow)";
+          if (edge.isSubagent) {
+            strokeColor = edge.running ? "oklch(0.72 0.17 145)" : "oklch(0.55 0.12 160)";
+            marker = "url(#ade-wire-arrow-subagent)";
+          } else if (edge.isFork) {
+            strokeColor = "oklch(0.6 0.14 300)";
+            marker = "url(#ade-wire-arrow-fork)";
+          }
+          return import_react.default.createElement("path", {
+            key: edge.id,
+            d,
+            fill: "none",
+            stroke: strokeColor,
+            strokeWidth: edge.running ? 2.5 : 1.8,
+            strokeDasharray: edge.running ? "6 6" : void 0,
+            markerEnd: marker,
+            style: edge.running ? { animation: "adeFlowPulse 1.2s linear infinite" } : void 0
+          });
+        })
+      ),
+      // Nodes Layer
+      visibleNodes.map((node) => {
+        const pos = positions[node.id] || { x: 80, y: 80 };
+        const isSelected = selectedNodeId === node.id;
+        const isCurrent = currentSessionId === node.id;
+        let badgeBg = "oklch(0.24 0.02 260)";
+        let badgeFg = "oklch(0.7 0.02 260)";
+        let badgeText = "ROOT";
+        if (node.isSubagent) {
+          badgeBg = "oklch(0.24 0.06 160 / 0.4)";
+          badgeFg = "oklch(0.75 0.15 160)";
+          badgeText = "SUBAGENT";
+        } else if (node.isFork) {
+          badgeBg = "oklch(0.24 0.08 300 / 0.4)";
+          badgeFg = "oklch(0.75 0.18 300)";
+          badgeText = "FORK";
+        }
+        return import_react.default.createElement(
+          "div",
+          {
+            key: node.id,
+            "data-node-card": node.id,
+            style: {
+              position: "absolute",
+              left: pos.x,
+              top: pos.y,
+              width: 260,
+              background: isSelected ? "oklch(0.22 0.03 250)" : "oklch(0.18 0.018 260)",
+              border: isSelected ? "1px solid oklch(0.65 0.16 240)" : node.running ? "1px solid oklch(0.68 0.18 145)" : isCurrent ? "1px solid oklch(0.48 0.12 240)" : "1px solid oklch(0.28 0.02 260)",
+              boxShadow: isSelected ? "0 0 0 2px oklch(0.65 0.16 240 / 0.3), 0 8px 24px rgba(0,0,0,0.5)" : "0 4px 16px rgba(0,0,0,0.3)",
+              borderRadius: 8,
+              padding: "8px 10px",
+              cursor: "pointer",
+              zIndex: isSelected ? 20 : 10,
+              transition: "border-color 140ms ease, box-shadow 140ms ease"
+            },
+            onMouseDown: (e) => {
+              if (e.target.closest("button")) return;
+              e.stopPropagation();
+              setSelectedNodeId(node.id);
+              draggingNodeRef.current = node.id;
+              dragOffsetRef.current = {
+                x: (e.clientX - transform.x) / transform.k - pos.x,
+                y: (e.clientY - transform.y) / transform.k - pos.y
+              };
+            },
+            onDoubleClick: (e) => {
+              e.stopPropagation();
+              if (onOpenSession) onOpenSession(node.id);
+            }
+          },
+          // Card Header
+          import_react.default.createElement(
+            "div",
+            {
+              style: {
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: 5
+              }
+            },
+            import_react.default.createElement(
+              "span",
+              {
+                style: {
+                  fontSize: 9.5,
+                  fontWeight: 700,
+                  letterSpacing: "0.04em",
+                  padding: "1px 5px",
+                  borderRadius: 3,
+                  background: badgeBg,
+                  color: badgeFg
+                }
+              },
+              badgeText
+            ),
+            import_react.default.createElement(
+              "div",
+              {
+                style: {
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  fontSize: 10,
+                  fontFamily: "ui-monospace, monospace",
+                  color: "oklch(0.6 0.02 260)"
+                }
+              },
+              import_react.default.createElement("span", {
+                style: {
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  background: node.running ? "oklch(0.72 0.17 145)" : "oklch(0.45 0.02 260)",
+                  boxShadow: node.running ? "0 0 6px oklch(0.72 0.17 145)" : void 0
+                }
+              }),
+              node.running ? "running" : "idle"
+            )
+          ),
+          // Title
+          import_react.default.createElement(
+            "div",
+            {
+              title: node.title,
+              style: {
+                fontSize: 12,
+                fontWeight: 600,
+                color: "oklch(0.96 0.005 260)",
+                lineHeight: 1.35,
+                maxHeight: 32,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+                marginBottom: 6
+              }
+            },
+            node.title
+          ),
+          // Card Footer: Actions
+          import_react.default.createElement(
+            "div",
+            {
+              style: {
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                borderTop: "1px solid oklch(0.24 0.018 260)",
+                paddingTop: 5,
+                fontSize: 10,
+                color: "oklch(0.55 0.02 260)",
+                fontFamily: "ui-monospace, monospace"
+              }
+            },
+            import_react.default.createElement("span", null, node.id.slice(0, 8)),
+            import_react.default.createElement(
+              "div",
+              { style: { display: "flex", gap: 4 } },
+              import_react.default.createElement(
+                "button",
+                {
+                  type: "button",
+                  title: "Open in split pane",
+                  onClick: (e) => {
+                    e.stopPropagation();
+                    if (onSplitSession) onSplitSession(node.id);
+                  },
+                  style: {
+                    background: "oklch(0.24 0.02 260)",
+                    border: "1px solid oklch(0.3 0.02 260)",
+                    color: "oklch(0.85 0.01 260)",
+                    borderRadius: 3,
+                    padding: "2px 5px",
+                    fontSize: 10,
+                    cursor: "pointer"
+                  }
+                },
+                "Split"
+              ),
+              import_react.default.createElement(
+                "button",
+                {
+                  type: "button",
+                  title: "Open conversation",
+                  onClick: (e) => {
+                    e.stopPropagation();
+                    if (onOpenSession) onOpenSession(node.id);
+                  },
+                  style: {
+                    background: "oklch(0.24 0.02 260)",
+                    border: "1px solid oklch(0.3 0.02 260)",
+                    color: "oklch(0.85 0.01 260)",
+                    borderRadius: 3,
+                    padding: "2px 5px",
+                    fontSize: 10,
+                    cursor: "pointer"
+                  }
+                },
+                "Open"
+              )
+            )
+          )
+        );
+      })
+    ),
+    // Selected Node Inspector Floating Drawer
+    selectedNode ? import_react.default.createElement(
+      "div",
+      {
+        "data-graph-drawer": "",
+        style: {
+          position: "absolute",
+          bottom: 14,
+          right: 14,
+          width: 300,
+          background: "oklch(0.16 0.018 260 / 0.95)",
+          backdropFilter: "blur(14px)",
+          border: "1px solid oklch(0.3 0.02 260)",
+          borderRadius: 8,
+          padding: 12,
+          zIndex: 50,
+          boxShadow: "0 8px 28px rgba(0,0,0,0.4)"
+        }
+      },
+      import_react.default.createElement(
+        "div",
+        { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 } },
+        import_react.default.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: "oklch(0.96 0.005 260)" } }, "Session Node Details"),
+        import_react.default.createElement(
+          "button",
+          {
+            type: "button",
+            onClick: () => setSelectedNodeId(null),
+            style: {
+              background: "transparent",
+              border: "none",
+              color: "oklch(0.6 0.02 260)",
+              cursor: "pointer",
+              fontSize: 14
+            }
+          },
+          "\u2715"
+        )
+      ),
+      import_react.default.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "oklch(0.92 0.01 260)", marginBottom: 8 } }, selectedNode.title),
+      import_react.default.createElement(
+        "div",
+        { style: { display: "flex", flexDirection: "column", gap: 4, fontSize: 10.5, fontFamily: "ui-monospace, monospace", color: "oklch(0.7 0.02 260)", marginBottom: 12 } },
+        import_react.default.createElement("div", { style: { display: "flex", justifyContent: "space-between" } }, import_react.default.createElement("span", null, "Session ID:"), import_react.default.createElement("span", { style: { color: "oklch(0.9 0.01 260)" } }, selectedNode.id)),
+        import_react.default.createElement("div", { style: { display: "flex", justifyContent: "space-between" } }, import_react.default.createElement("span", null, "Origin:"), import_react.default.createElement("span", { style: { color: "oklch(0.9 0.01 260)" } }, selectedNode.origin)),
+        selectedNode.parentId ? import_react.default.createElement("div", { style: { display: "flex", justifyContent: "space-between" } }, import_react.default.createElement("span", null, "Parent:"), import_react.default.createElement("span", { style: { color: "oklch(0.9 0.01 260)" } }, selectedNode.parentId.slice(0, 10))) : null,
+        import_react.default.createElement("div", { style: { display: "flex", justifyContent: "space-between" } }, import_react.default.createElement("span", null, "Status:"), import_react.default.createElement("span", { style: { color: selectedNode.running ? "oklch(0.75 0.18 145)" : "oklch(0.6 0.02 260)" } }, selectedNode.running ? "running" : "idle"))
+      ),
+      import_react.default.createElement(
+        "div",
+        { style: { display: "flex", gap: 6 } },
+        import_react.default.createElement(
+          "button",
+          {
+            type: "button",
+            onClick: () => onOpenSession && onOpenSession(selectedNode.id),
+            style: {
+              flex: 1,
+              background: "oklch(0.24 0.02 260)",
+              border: "1px solid oklch(0.32 0.02 260)",
+              color: "oklch(0.95 0.005 260)",
+              borderRadius: 5,
+              padding: "5px 0",
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: "pointer"
+            }
+          },
+          "Open Chat"
+        ),
+        import_react.default.createElement(
+          "button",
+          {
+            type: "button",
+            onClick: () => onSplitSession && onSplitSession(selectedNode.id),
+            style: {
+              flex: 1,
+              background: "oklch(0.55 0.16 240)",
+              border: "1px solid oklch(0.65 0.18 240)",
+              color: "#fff",
+              borderRadius: 5,
+              padding: "5px 0",
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: "pointer"
+            }
+          },
+          "Split to Pane"
+        )
+      )
+    ) : null
+  );
+}
 
 // client/layout-engine.js
 var MIN_FLEX = 0.15;
@@ -983,6 +1832,8 @@ var cachedSessionProvider = null;
 var cachedUseSessionStatus = null;
 var aliasDispose = null;
 var subagentRowActionDispose = null;
+var graphViewDispose = null;
+var graphMainDispose = null;
 var expandedSessionIds = /* @__PURE__ */ new Set();
 var expandedListeners = /* @__PURE__ */ new Set();
 function emitExpandedChange() {
@@ -1032,6 +1883,115 @@ function disposeSubagentRowAction() {
   } catch (_) {
   }
   subagentRowActionDispose = null;
+}
+function ADENodeGraphViewWrapper(props) {
+  const sessionId = props && props.sessionId ? props.sessionId : currentMainSessionId();
+  const sessionsSnapshot = (0, import_react2.useSyncExternalStore)(subscribeSubagent, () => readSessionsSnapshot());
+  const onOpenSession = (id) => {
+    if (!id) return;
+    try {
+      if (app && app.uiWorkspace && typeof app.uiWorkspace.openSession === "function") {
+        app.uiWorkspace.openSession(id);
+        return;
+      }
+    } catch (_) {
+    }
+    try {
+      if (app && app.layout && typeof app.layout.selectPanel === "function") {
+        app.layout.selectPanel(null);
+      }
+    } catch (_) {
+    }
+  };
+  const onSplitSession = (id) => {
+    if (!id) return;
+    try {
+      ensureReference(id);
+    } catch (_) {
+    }
+    const firstId = state.panes && state.panes.length > 0 ? state.panes[0].sessionId : currentMainSessionId();
+    const anchor = firstId && firstId !== id ? firstId : null;
+    let tree = state.tree && state.tree.root ? state.tree : anchor ? { root: { kind: "pane", id: anchor } } : { root: { kind: "pane", id } };
+    if (!anchor) {
+      tree = { root: { kind: "pane", id } };
+    } else {
+      tree = insertOrSplit(tree, id, anchor, "right");
+    }
+    setTree(tree);
+    try {
+      if (app && app.layout && typeof app.layout.selectPanel === "function") {
+        app.layout.selectPanel(null);
+      }
+    } catch (_) {
+    }
+  };
+  const onForkSession = (id) => {
+    if (!id) return;
+    try {
+      if (app && app.sessions && typeof app.sessions.fork === "function") {
+        app.sessions.fork({ sessionId: id });
+      }
+    } catch (_) {
+    }
+  };
+  return import_react2.default.createElement(ADENodeGraphCanvas, {
+    sessionsSnapshot,
+    currentSessionId: sessionId,
+    onOpenSession,
+    onSplitSession,
+    onForkSession
+  });
+}
+function ensureGraphViewRegistered() {
+  refreshHandles();
+  if (!app || !app.slots || !app.slots.register) return false;
+  try {
+    const entries = app.slots.entries("conversation.view") || [];
+    if (entries.some((entry) => entry && entry.options && entry.options.id === "ade-node-graph")) return true;
+    graphViewDispose = app.slots.register(
+      {
+        name: "conversation.view",
+        id: "ade-node-graph",
+        order: 20,
+        label: "Graph"
+      },
+      ADENodeGraphViewWrapper
+    );
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+function ensureGraphMainRegistered() {
+  refreshHandles();
+  if (!app || !app.slots || !app.slots.register) return false;
+  try {
+    const entries = app.slots.entries("main") || [];
+    if (entries.some((entry) => entry && entry.options && entry.options.key === "ade-node-graph")) return true;
+    graphMainDispose = app.slots.register(
+      {
+        name: "main",
+        key: "ade-node-graph",
+        label: "Graph"
+      },
+      ADENodeGraphViewWrapper
+    );
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+function disposeGraphRegistrations() {
+  try {
+    graphViewDispose?.();
+  } catch (_) {
+  }
+  try {
+    graphMainDispose?.();
+  } catch (_) {
+  }
+  graphViewDispose = null;
+  graphMainDispose = null;
 }
 function ensureAliasRegistered() {
   refreshHandles();
@@ -1122,7 +2082,7 @@ function ensureTree(rawTree, panes) {
   }
   return tree;
 }
-var PaneErrorBoundary = class extends import_react.default.Component {
+var PaneErrorBoundary = class extends import_react2.default.Component {
   constructor(props) {
     super(props);
     this.state = { error: null };
@@ -1135,7 +2095,7 @@ var PaneErrorBoundary = class extends import_react.default.Component {
   }
   render() {
     if (this.state.error) {
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "div",
         {
           style: {
@@ -1152,13 +2112,13 @@ var PaneErrorBoundary = class extends import_react.default.Component {
             textAlign: "center"
           }
         },
-        import_react.default.createElement("div", { style: { fontWeight: 600, marginBottom: 8 } }, "Session view crashed"),
-        import_react.default.createElement(
+        import_react2.default.createElement("div", { style: { fontWeight: 600, marginBottom: 8 } }, "Session view crashed"),
+        import_react2.default.createElement(
           "div",
           { style: { opacity: 0.8, maxWidth: 360, wordBreak: "break-word", fontSize: 11, marginBottom: 12 } },
           String(this.state.error?.message || this.state.error)
         ),
-        import_react.default.createElement(
+        import_react2.default.createElement(
           "button",
           {
             onClick: () => this.setState({ error: null }),
@@ -1187,6 +2147,10 @@ function injectMotionStyles() {
     const style = document.createElement("style");
     style.id = MOTION_STYLE_ID;
     style.textContent = `
+      @keyframes adeFlowPulse {
+        from { stroke-dashoffset: 24; }
+        to { stroke-dashoffset: 0; }
+      }
       @keyframes ade-hypr-pop-in {
         0% { opacity: 0; transform: scale(0.93); }
         60% { opacity: 1; transform: scale(1.012); }
@@ -1860,90 +2824,99 @@ function adeIcon(type, size) {
   const stroke = { stroke: "currentColor", strokeWidth: 1.3, strokeLinecap: "round", strokeLinejoin: "round" };
   switch (type) {
     case "chevron-left":
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
-        import_react.default.createElement("path", { d: "M9 2.5 4.5 7l4.5 4.5", ...stroke })
+        import_react2.default.createElement("path", { d: "M9 2.5 4.5 7l4.5 4.5", ...stroke })
       );
     case "chevron-right":
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
-        import_react.default.createElement("path", { d: "M5 2.5 9.5 7 5 11.5", ...stroke })
+        import_react2.default.createElement("path", { d: "M5 2.5 9.5 7 5 11.5", ...stroke })
       );
     case "chevron-down":
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
-        import_react.default.createElement("path", { d: "M2.5 5 7 9.5 11.5 5", ...stroke })
+        import_react2.default.createElement("path", { d: "M2.5 5 7 9.5 11.5 5", ...stroke })
       );
     case "close":
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
-        import_react.default.createElement("path", { d: "M3 3l8 8M11 3l-8 8", ...stroke })
+        import_react2.default.createElement("path", { d: "M3 3l8 8M11 3l-8 8", ...stroke })
       );
     case "plus":
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
-        import_react.default.createElement("path", { d: "M7 3v8M3 7h8", ...stroke })
+        import_react2.default.createElement("path", { d: "M7 3v8M3 7h8", ...stroke })
       );
     case "zap":
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: px, height: px, viewBox: "0 0 14 14", fill: "currentColor", style },
-        import_react.default.createElement("path", { d: "M8 1.5 3 8h3.2l-.8 4.5L11 6H7.8L8 1.5Z" })
+        import_react2.default.createElement("path", { d: "M8 1.5 3 8h3.2l-.8 4.5L11 6H7.8L8 1.5Z" })
       );
     case "diamond":
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
-        import_react.default.createElement("path", { d: "M7 2.5l4.5 5L7 11.5 2.5 7.5 7 2.5Z", ...stroke })
+        import_react2.default.createElement("path", { d: "M7 2.5l4.5 5L7 11.5 2.5 7.5 7 2.5Z", ...stroke })
       );
     case "check":
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
-        import_react.default.createElement("path", { d: "M3 7.5l2.5 2.5L11 4.5", ...stroke })
+        import_react2.default.createElement("path", { d: "M3 7.5l2.5 2.5L11 4.5", ...stroke })
       );
     case "popout":
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
-        import_react.default.createElement("path", { d: "M5.5 3.5h-2a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2", ...stroke }),
-        import_react.default.createElement("path", { d: "M9 3.5h1.5v1.5", ...stroke }),
-        import_react.default.createElement("path", { d: "M10.5 3.5 6.5 7.5", ...stroke })
+        import_react2.default.createElement("path", { d: "M5.5 3.5h-2a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2", ...stroke }),
+        import_react2.default.createElement("path", { d: "M9 3.5h1.5v1.5", ...stroke }),
+        import_react2.default.createElement("path", { d: "M10.5 3.5 6.5 7.5", ...stroke })
       );
     case "stack":
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
-        import_react.default.createElement("path", { d: "M2.5 4.5h9M2.5 7h9M2.5 9.5h9", ...stroke }),
-        import_react.default.createElement("rect", { x: 2.5, y: 2.5, width: 9, height: 9, rx: 1.5, stroke: "currentColor", strokeWidth: 1.3, fill: "none" })
+        import_react2.default.createElement("path", { d: "M2.5 4.5h9M2.5 7h9M2.5 9.5h9", ...stroke }),
+        import_react2.default.createElement("rect", { x: 2.5, y: 2.5, width: 9, height: 9, rx: 1.5, stroke: "currentColor", strokeWidth: 1.3, fill: "none" })
       );
     case "split-rows":
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
-        import_react.default.createElement("rect", { x: 1.5, y: 1, width: 11, height: 5.2, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
-        import_react.default.createElement("rect", { x: 1.5, y: 7.8, width: 11, height: 5.2, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 })
+        import_react2.default.createElement("rect", { x: 1.5, y: 1, width: 11, height: 5.2, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
+        import_react2.default.createElement("rect", { x: 1.5, y: 7.8, width: 11, height: 5.2, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 })
       );
     case "split-cols":
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
-        import_react.default.createElement("rect", { x: 1, y: 1.5, width: 5.2, height: 11, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
-        import_react.default.createElement("rect", { x: 7.8, y: 1.5, width: 5.2, height: 11, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 })
+        import_react2.default.createElement("rect", { x: 1, y: 1.5, width: 5.2, height: 11, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
+        import_react2.default.createElement("rect", { x: 7.8, y: 1.5, width: 5.2, height: 11, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 })
       );
     case "trajectory":
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
-        import_react.default.createElement("circle", { cx: 3, cy: 11, r: 1.5, fill: "currentColor" }),
-        import_react.default.createElement("circle", { cx: 7, cy: 6.5, r: 1.2, fill: "currentColor" }),
-        import_react.default.createElement("circle", { cx: 11, cy: 3, r: 1.5, fill: "currentColor" }),
-        import_react.default.createElement("path", { d: "M3 11 C 3 6.5, 5 6.5, 7 6.5 S 11 6.5, 11 3", ...stroke })
+        import_react2.default.createElement("circle", { cx: 3, cy: 11, r: 1.5, fill: "currentColor" }),
+        import_react2.default.createElement("circle", { cx: 7, cy: 6.5, r: 1.2, fill: "currentColor" }),
+        import_react2.default.createElement("circle", { cx: 11, cy: 3, r: 1.5, fill: "currentColor" }),
+        import_react2.default.createElement("path", { d: "M3 11 C 3 6.5, 5 6.5, 7 6.5 S 11 6.5, 11 3", ...stroke })
+      );
+    case "graph":
+      return import_react2.default.createElement(
+        "svg",
+        { width: px, height: px, viewBox: "0 0 24 24", fill: "none", style },
+        import_react2.default.createElement("circle", { cx: 5, cy: 6, r: 2, stroke: "currentColor", strokeWidth: 1.3 }),
+        import_react2.default.createElement("circle", { cx: 19, cy: 6, r: 2, stroke: "currentColor", strokeWidth: 1.3 }),
+        import_react2.default.createElement("circle", { cx: 12, cy: 18, r: 2, stroke: "currentColor", strokeWidth: 1.3 }),
+        import_react2.default.createElement("path", { d: "M7 7.5 10.5 16M17 7.5 13.5 16", ...stroke })
       );
     default:
       return null;
@@ -1952,42 +2925,42 @@ function adeIcon(type, size) {
 function renderLayoutIcon(type) {
   switch (type) {
     case "col-2":
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: 13, height: 13, viewBox: "0 0 14 14", fill: "none", style: { flex: "0 0 auto" } },
-        import_react.default.createElement("rect", { x: 1, y: 1.5, width: 5.2, height: 11, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
-        import_react.default.createElement("rect", { x: 7.8, y: 1.5, width: 5.2, height: 11, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 })
+        import_react2.default.createElement("rect", { x: 1, y: 1.5, width: 5.2, height: 11, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
+        import_react2.default.createElement("rect", { x: 7.8, y: 1.5, width: 5.2, height: 11, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 })
       );
     case "row-2":
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: 13, height: 13, viewBox: "0 0 14 14", fill: "none", style: { flex: "0 0 auto" } },
-        import_react.default.createElement("rect", { x: 1.5, y: 1, width: 11, height: 5.2, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
-        import_react.default.createElement("rect", { x: 1.5, y: 7.8, width: 11, height: 5.2, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 })
+        import_react2.default.createElement("rect", { x: 1.5, y: 1, width: 11, height: 5.2, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
+        import_react2.default.createElement("rect", { x: 1.5, y: 7.8, width: 11, height: 5.2, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 })
       );
     case "master-stack-3":
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: 13, height: 13, viewBox: "0 0 14 14", fill: "none", style: { flex: "0 0 auto" } },
-        import_react.default.createElement("rect", { x: 1, y: 1.5, width: 6.2, height: 11, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
-        import_react.default.createElement("rect", { x: 8.5, y: 1.5, width: 4.5, height: 5, rx: 1.2, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
-        import_react.default.createElement("rect", { x: 8.5, y: 7.5, width: 4.5, height: 5, rx: 1.2, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 })
+        import_react2.default.createElement("rect", { x: 1, y: 1.5, width: 6.2, height: 11, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
+        import_react2.default.createElement("rect", { x: 8.5, y: 1.5, width: 4.5, height: 5, rx: 1.2, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
+        import_react2.default.createElement("rect", { x: 8.5, y: 7.5, width: 4.5, height: 5, rx: 1.2, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 })
       );
     case "quad-4":
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: 13, height: 13, viewBox: "0 0 14 14", fill: "none", style: { flex: "0 0 auto" } },
-        import_react.default.createElement("rect", { x: 1, y: 1.5, width: 5.2, height: 5, rx: 1.2, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
-        import_react.default.createElement("rect", { x: 7.8, y: 1.5, width: 5.2, height: 5, rx: 1.2, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
-        import_react.default.createElement("rect", { x: 1, y: 7.5, width: 5.2, height: 5, rx: 1.2, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
-        import_react.default.createElement("rect", { x: 7.8, y: 7.5, width: 5.2, height: 5, rx: 1.2, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 })
+        import_react2.default.createElement("rect", { x: 1, y: 1.5, width: 5.2, height: 5, rx: 1.2, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
+        import_react2.default.createElement("rect", { x: 7.8, y: 1.5, width: 5.2, height: 5, rx: 1.2, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
+        import_react2.default.createElement("rect", { x: 1, y: 7.5, width: 5.2, height: 5, rx: 1.2, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
+        import_react2.default.createElement("rect", { x: 7.8, y: 7.5, width: 5.2, height: 5, rx: 1.2, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 })
       );
     default:
-      return import_react.default.createElement(
+      return import_react2.default.createElement(
         "svg",
         { width: 13, height: 13, viewBox: "0 0 14 14", fill: "none", style: { flex: "0 0 auto" } },
-        import_react.default.createElement("rect", { x: 1, y: 1, width: 12, height: 12, rx: 2, stroke: "currentColor", strokeWidth: 1.2, strokeDasharray: "2 1.5" }),
-        import_react.default.createElement("path", { d: "M7 3v8M3 7h8", stroke: "currentColor", strokeWidth: 1, opacity: 0.6 })
+        import_react2.default.createElement("rect", { x: 1, y: 1, width: 12, height: 12, rx: 2, stroke: "currentColor", strokeWidth: 1.2, strokeDasharray: "2 1.5" }),
+        import_react2.default.createElement("path", { d: "M7 3v8M3 7h8", stroke: "currentColor", strokeWidth: 1, opacity: 0.6 })
       );
   }
 }
@@ -2010,19 +2983,19 @@ function isCustomActive(layout, snap) {
   return currentIds === savedIds;
 }
 function ADELayoutsSection(props) {
-  const [collapsed, setCollapsed] = import_react.default.useState(false);
-  const [isNaming, setIsNaming] = import_react.default.useState(false);
-  const [nameInput, setNameInput] = import_react.default.useState("");
-  const inputRef = import_react.default.useRef(null);
-  const snap = (0, import_react.useSyncExternalStore)(subscribe, getState);
-  const layoutSnap = (0, import_react.useSyncExternalStore)(subscribeLayouts, getLayoutsSnapshot);
-  const subagentSnap = (0, import_react.useSyncExternalStore)(subscribeSubagent, getSubagentSnapshot);
+  const [collapsed, setCollapsed] = import_react2.default.useState(false);
+  const [isNaming, setIsNaming] = import_react2.default.useState(false);
+  const [nameInput, setNameInput] = import_react2.default.useState("");
+  const inputRef = import_react2.default.useRef(null);
+  const snap = (0, import_react2.useSyncExternalStore)(subscribe, getState);
+  const layoutSnap = (0, import_react2.useSyncExternalStore)(subscribeLayouts, getLayoutsSnapshot);
+  const subagentSnap = (0, import_react2.useSyncExternalStore)(subscribeSubagent, getSubagentSnapshot);
   const { customLayouts } = layoutSnap;
   const presets = getPresetLayouts();
   const panes = snap.panes || [];
   const canSave = panes.length >= 1;
   const autosplit = subagentSnap ? !!subagentSnap.autosplit : true;
-  import_react.default.useEffect(() => {
+  import_react2.default.useEffect(() => {
     if (isNaming && inputRef.current) {
       inputRef.current.focus();
       inputRef.current.select();
@@ -2066,10 +3039,10 @@ function ADELayoutsSection(props) {
     e.stopPropagation();
     deleteCustomLayout(id);
   };
-  return import_react.default.createElement(
+  return import_react2.default.createElement(
     "div",
     { "data-ade-sidebar-layouts": "" },
-    import_react.default.createElement(
+    import_react2.default.createElement(
       "div",
       {
         style: {
@@ -2084,7 +3057,7 @@ function ADELayoutsSection(props) {
         },
         onClick: () => setCollapsed(!collapsed)
       },
-      import_react.default.createElement(
+      import_react2.default.createElement(
         "div",
         {
           style: {
@@ -2098,13 +3071,13 @@ function ADELayoutsSection(props) {
             textTransform: "uppercase"
           }
         },
-        import_react.default.createElement(
+        import_react2.default.createElement(
           "span",
           { style: { display: "inline-flex", alignItems: "center", justifyContent: "center", width: 12, height: 12 } },
           adeIcon(collapsed ? "chevron-right" : "chevron-down", 10)
         ),
-        import_react.default.createElement("span", null, "LAYOUTS"),
-        import_react.default.createElement(
+        import_react2.default.createElement("span", null, "LAYOUTS"),
+        import_react2.default.createElement(
           "span",
           {
             style: {
@@ -2119,44 +3092,88 @@ function ADELayoutsSection(props) {
           String(customLayouts.length)
         )
       ),
-      canSave ? import_react.default.createElement(
-        "button",
+      import_react2.default.createElement(
+        "div",
         {
-          type: "button",
-          title: isNaming ? "Cancel naming" : "Save current split as a named layout",
-          onClick: isNaming ? handleCancelSave : handleStartSave,
           style: {
-            background: isNaming ? "rgba(255, 255, 255, 0.1)" : "transparent",
-            border: "none",
-            color: "var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.65))",
-            cursor: "pointer",
-            padding: "2px 6px",
-            borderRadius: "var(--dsw-radius-sm, 4px)",
-            fontSize: 11,
-            display: "inline-flex",
+            display: "flex",
             alignItems: "center",
-            gap: 3
+            gap: 2
           }
         },
-        import_react.default.createElement(
-          "span",
-          { style: { display: "inline-flex", alignItems: "center" } },
-          adeIcon(isNaming ? "close" : "plus", 11)
+        import_react2.default.createElement(
+          "button",
+          {
+            type: "button",
+            title: "Open lineage graph canvas",
+            onClick: (e) => {
+              e.stopPropagation();
+              try {
+                if (app && app.layout && typeof app.layout.selectPanel === "function") {
+                  app.layout.selectPanel("ade-node-graph");
+                }
+              } catch (_) {
+              }
+            },
+            style: {
+              background: "transparent",
+              border: "none",
+              color: "var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.65))",
+              cursor: "pointer",
+              padding: "2px 6px",
+              borderRadius: "var(--dsw-radius-sm, 4px)",
+              fontSize: 11,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 3
+            }
+          },
+          import_react2.default.createElement(
+            "span",
+            { style: { display: "inline-flex", alignItems: "center" } },
+            adeIcon("graph", 11)
+          ),
+          import_react2.default.createElement("span", null, "Graph")
         ),
-        import_react.default.createElement("span", null, isNaming ? "Cancel" : "Save")
-      ) : null
+        canSave ? import_react2.default.createElement(
+          "button",
+          {
+            type: "button",
+            title: isNaming ? "Cancel naming" : "Save current split as a named layout",
+            onClick: isNaming ? handleCancelSave : handleStartSave,
+            style: {
+              background: isNaming ? "rgba(255, 255, 255, 0.1)" : "transparent",
+              border: "none",
+              color: "var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.65))",
+              cursor: "pointer",
+              padding: "2px 6px",
+              borderRadius: "var(--dsw-radius-sm, 4px)",
+              fontSize: 11,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 3
+            }
+          },
+          import_react2.default.createElement(
+            "span",
+            { style: { display: "inline-flex", alignItems: "center" } },
+            adeIcon(isNaming ? "close" : "plus", 11)
+          ),
+          import_react2.default.createElement("span", null, isNaming ? "Cancel" : "Save")
+        ) : null
+      )
     ),
-    !collapsed ? import_react.default.createElement(
+    !collapsed ? import_react2.default.createElement(
       "div",
       { style: { display: "flex", flexDirection: "column", gap: 3, marginTop: 4 } },
-      isNaming ? import_react.default.createElement(
+      isNaming ? import_react2.default.createElement(
         "form",
         {
           "data-ade-save-form": "",
           onSubmit: handleConfirmSave,
           onClick: (e) => e.stopPropagation()
         },
-        import_react.default.createElement("input", {
+        import_react2.default.createElement("input", {
           ref: inputRef,
           "data-ade-save-input": "",
           type: "text",
@@ -2167,7 +3184,7 @@ function ADELayoutsSection(props) {
             if (e.key === "Escape") handleCancelSave(e);
           }
         }),
-        import_react.default.createElement(
+        import_react2.default.createElement(
           "button",
           {
             type: "submit",
@@ -2176,7 +3193,7 @@ function ADELayoutsSection(props) {
           },
           "Save"
         ),
-        import_react.default.createElement(
+        import_react2.default.createElement(
           "button",
           {
             type: "button",
@@ -2187,12 +3204,12 @@ function ADELayoutsSection(props) {
           adeIcon("close", 11)
         )
       ) : null,
-      import_react.default.createElement(
+      import_react2.default.createElement(
         "div",
         { "data-ade-preset-strip": "", title: "Quick split presets" },
         presets.map((preset) => {
           const isActive = isPresetActive(preset, snap);
-          return import_react.default.createElement(
+          return import_react2.default.createElement(
             "button",
             {
               key: preset.id,
@@ -2206,7 +3223,7 @@ function ADELayoutsSection(props) {
           );
         })
       ),
-      import_react.default.createElement(
+      import_react2.default.createElement(
         "div",
         {
           "data-ade-autosplit-row": "",
@@ -2223,13 +3240,13 @@ function ADELayoutsSection(props) {
             userSelect: "none"
           }
         },
-        import_react.default.createElement(
+        import_react2.default.createElement(
           "div",
           { style: { display: "flex", alignItems: "center", gap: 6 } },
-          import_react.default.createElement("span", { style: { display: "inline-flex", alignItems: "center", color: autosplit ? "#38bdf8" : "var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.4))" } }, adeIcon("zap", 11)),
-          import_react.default.createElement("span", { style: { fontWeight: 500 } }, "Auto-split Subagents")
+          import_react2.default.createElement("span", { style: { display: "inline-flex", alignItems: "center", color: autosplit ? "#38bdf8" : "var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.4))" } }, adeIcon("zap", 11)),
+          import_react2.default.createElement("span", { style: { fontWeight: 500 } }, "Auto-split Subagents")
         ),
-        import_react.default.createElement(
+        import_react2.default.createElement(
           "button",
           {
             type: "button",
@@ -2256,7 +3273,7 @@ function ADELayoutsSection(props) {
       customLayouts.length > 0 ? customLayouts.map((layout) => {
         const isActive = isCustomActive(layout, snap);
         const paneCount = layout.panes && layout.panes.length || 0;
-        return import_react.default.createElement(
+        return import_react2.default.createElement(
           "div",
           {
             key: layout.id,
@@ -2265,11 +3282,11 @@ function ADELayoutsSection(props) {
             onClick: () => handleApplyCustom(layout),
             title: `${layout.name} (Saved layout with ${paneCount} panes)`
           },
-          import_react.default.createElement(
+          import_react2.default.createElement(
             "div",
             { style: { display: "flex", alignItems: "center", gap: 7, minWidth: 0, overflow: "hidden" } },
             renderLayoutIcon("custom"),
-            import_react.default.createElement(
+            import_react2.default.createElement(
               "span",
               {
                 style: {
@@ -2283,10 +3300,10 @@ function ADELayoutsSection(props) {
               layout.name
             )
           ),
-          import_react.default.createElement(
+          import_react2.default.createElement(
             "div",
             { style: { display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto" } },
-            import_react.default.createElement(
+            import_react2.default.createElement(
               "span",
               {
                 style: {
@@ -2300,7 +3317,7 @@ function ADELayoutsSection(props) {
               },
               `${paneCount}P`
             ),
-            import_react.default.createElement(
+            import_react2.default.createElement(
               "button",
               {
                 type: "button",
@@ -2322,7 +3339,7 @@ function ADELayoutsSection(props) {
             )
           )
         );
-      }) : import_react.default.createElement(
+      }) : import_react2.default.createElement(
         "div",
         {
           style: {
@@ -2339,11 +3356,11 @@ function ADELayoutsSection(props) {
 }
 function ADESidebarWrapper(props) {
   const orig = originalSidebarWorkspaces;
-  return import_react.default.createElement(
+  return import_react2.default.createElement(
     "div",
     { "data-ade-sidebar-root": "" },
-    props.wide !== false ? import_react.default.createElement(ADELayoutsSection, { wide: props.wide }) : null,
-    orig ? import_react.default.createElement(orig, props) : null
+    props.wide !== false ? import_react2.default.createElement(ADELayoutsSection, { wide: props.wide }) : null,
+    orig ? import_react2.default.createElement(orig, props) : null
   );
 }
 function ADEPaneTelemetryReader(props) {
@@ -2354,9 +3371,9 @@ function ADEPaneTelemetryReader(props) {
   const isRunning = !!status?.running;
   const isPending = !!status?.pendingInteraction;
   const isUnread = !!status?.completionUnread;
-  const [elapsed, setElapsed] = import_react.default.useState(0);
-  const startRef = import_react.default.useRef(0);
-  import_react.default.useEffect(() => {
+  const [elapsed, setElapsed] = import_react2.default.useState(0);
+  const startRef = import_react2.default.useRef(0);
+  import_react2.default.useEffect(() => {
     if (isRunning) {
       if (!startRef.current) startRef.current = Date.now();
       setElapsed(Math.floor((Date.now() - startRef.current) / 1e3));
@@ -2372,7 +3389,7 @@ function ADEPaneTelemetryReader(props) {
   if (isRunning) {
     const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
     const ss = String(elapsed % 60).padStart(2, "0");
-    return import_react.default.createElement(
+    return import_react2.default.createElement(
       "div",
       {
         "data-ade-telemetry": "running",
@@ -2393,7 +3410,7 @@ function ADEPaneTelemetryReader(props) {
           userSelect: "none"
         }
       },
-      import_react.default.createElement("span", {
+      import_react2.default.createElement("span", {
         style: {
           width: 6,
           height: 6,
@@ -2403,8 +3420,8 @@ function ADEPaneTelemetryReader(props) {
           animation: "ade-pulse 1.2s ease-in-out infinite"
         }
       }),
-      import_react.default.createElement("span", { style: { letterSpacing: "0.03em" } }, "RUNNING"),
-      import_react.default.createElement(
+      import_react2.default.createElement("span", { style: { letterSpacing: "0.03em" } }, "RUNNING"),
+      import_react2.default.createElement(
         "span",
         {
           style: {
@@ -2420,7 +3437,7 @@ function ADEPaneTelemetryReader(props) {
     );
   }
   if (isPending) {
-    return import_react.default.createElement(
+    return import_react2.default.createElement(
       "div",
       {
         "data-ade-telemetry": "pending",
@@ -2442,12 +3459,12 @@ function ADEPaneTelemetryReader(props) {
           animation: "ade-pulse 2s ease-in-out infinite"
         }
       },
-      import_react.default.createElement("span", { style: { display: "inline-flex", alignItems: "center" } }, adeIcon("diamond", 10)),
-      import_react.default.createElement("span", { style: { letterSpacing: "0.03em" } }, "ATTENTION")
+      import_react2.default.createElement("span", { style: { display: "inline-flex", alignItems: "center" } }, adeIcon("diamond", 10)),
+      import_react2.default.createElement("span", { style: { letterSpacing: "0.03em" } }, "ATTENTION")
     );
   }
   if (isUnread) {
-    return import_react.default.createElement(
+    return import_react2.default.createElement(
       "div",
       {
         "data-ade-telemetry": "unread",
@@ -2468,15 +3485,15 @@ function ADEPaneTelemetryReader(props) {
           userSelect: "none"
         }
       },
-      import_react.default.createElement("span", { style: { display: "inline-flex", alignItems: "center" } }, adeIcon("check", 11)),
-      import_react.default.createElement("span", { style: { letterSpacing: "0.03em" } }, "READY")
+      import_react2.default.createElement("span", { style: { display: "inline-flex", alignItems: "center" } }, adeIcon("check", 11)),
+      import_react2.default.createElement("span", { style: { letterSpacing: "0.03em" } }, "READY")
     );
   }
   return null;
 }
 function ADEPaneTelemetry(props) {
   if (typeof props.useSessionStatus !== "function") return null;
-  return import_react.default.createElement(ADEPaneTelemetryReader, props);
+  return import_react2.default.createElement(ADEPaneTelemetryReader, props);
 }
 function useSubagentChildStatus(sessionId, useSessionStatus) {
   if (typeof useSessionStatus !== "function") return { running: false, pending: false };
@@ -2491,13 +3508,13 @@ function ADESubagentChip(props) {
   const pending = !!(status && status.pendingInteraction);
   const dotColor = running ? "#34d399" : pending ? "#f59e0b" : "rgba(255, 255, 255, 0.38)";
   const glowColor = running ? "rgba(52, 211, 153, 0.5)" : pending ? "rgba(245, 158, 11, 0.5)" : "transparent";
-  const chipRef = import_react.default.useRef(null);
-  import_react.default.useEffect(() => {
+  const chipRef = import_react2.default.useRef(null);
+  import_react2.default.useEffect(() => {
     if (active && chipRef.current) {
       chipRef.current.scrollIntoView({ inline: "nearest", block: "nearest" });
     }
   }, [active]);
-  return import_react.default.createElement(
+  return import_react2.default.createElement(
     "button",
     {
       key: child.id,
@@ -2528,7 +3545,7 @@ function ADESubagentChip(props) {
         boxShadow: active ? "none" : void 0
       }
     },
-    import_react.default.createElement("span", {
+    import_react2.default.createElement("span", {
       className: "ade-swarm-dot",
       style: {
         width: 7,
@@ -2539,10 +3556,10 @@ function ADESubagentChip(props) {
         flex: "0 0 auto"
       }
     }),
-    import_react.default.createElement("span", {
+    import_react2.default.createElement("span", {
       style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }
     }, child.label || child.id),
-    import_react.default.createElement(ADESubagentKidActions, {
+    import_react2.default.createElement(ADESubagentKidActions, {
       childId: child.id,
       active,
       onPopOut
@@ -2551,10 +3568,10 @@ function ADESubagentChip(props) {
 }
 function ADESubagentKidActions(props) {
   const { childId, active, onPopOut } = props;
-  return import_react.default.createElement(
+  return import_react2.default.createElement(
     "span",
     { style: { display: "inline-flex", gap: 4, marginLeft: 2 } },
-    active ? import_react.default.createElement("button", {
+    active ? import_react2.default.createElement("button", {
       type: "button",
       title: "Pop this subagent into its own pane",
       style: {
@@ -2611,7 +3628,7 @@ function ADESubagentChildRow(props) {
     );
     setTree(newTree);
   };
-  return import_react.default.createElement(
+  return import_react2.default.createElement(
     "div",
     {
       "data-ade-subagent-row": "",
@@ -2635,13 +3652,13 @@ function ADESubagentChildRow(props) {
         }
       }
     },
-    import_react.default.createElement("span", { "data-ade-tree-branch": "" }, isLast ? "\u2514\u2500" : "\u251C\u2500"),
-    import_react.default.createElement("span", {
+    import_react2.default.createElement("span", { "data-ade-tree-branch": "" }, isLast ? "\u2514\u2500" : "\u251C\u2500"),
+    import_react2.default.createElement("span", {
       "data-ade-subagent-dot": child.running ? "running" : "done"
     }),
-    import_react.default.createElement("span", { "data-ade-subagent-title": "" }, child.label),
-    child.running ? import_react.default.createElement("span", { "data-ade-subagent-badge": "running" }, "running") : null,
-    import_react.default.createElement(
+    import_react2.default.createElement("span", { "data-ade-subagent-title": "" }, child.label),
+    child.running ? import_react2.default.createElement("span", { "data-ade-subagent-badge": "running" }, "running") : null,
+    import_react2.default.createElement(
       "button",
       {
         type: "button",
@@ -2656,14 +3673,14 @@ function ADESubagentChildRow(props) {
 }
 function ADESubagentChildList(props) {
   const { parentSessionId, children } = props;
-  return import_react.default.createElement(
+  return import_react2.default.createElement(
     "div",
     {
       "data-ade-subagent-children": "",
       "data-parent-id": parentSessionId
     },
     children.map(
-      (child, index) => import_react.default.createElement(ADESubagentChildRow, {
+      (child, index) => import_react2.default.createElement(ADESubagentChildRow, {
         key: child.id,
         parentSessionId,
         child,
@@ -2675,13 +3692,13 @@ function ADESubagentChildList(props) {
 function ADESubagentRowExpander(props) {
   const sessionId = props.sessionId || props.node && props.node.id;
   if (!sessionId) return null;
-  const sessionSnap = (0, import_react.useSyncExternalStore)(subscribeSubagent, () => readSessionsSnapshot());
-  const isExpanded = (0, import_react.useSyncExternalStore)(subscribeExpanded, () => expandedSessionIds.has(sessionId));
-  const children = import_react.default.useMemo(() => {
+  const sessionSnap = (0, import_react2.useSyncExternalStore)(subscribeSubagent, () => readSessionsSnapshot());
+  const isExpanded = (0, import_react2.useSyncExternalStore)(subscribeExpanded, () => expandedSessionIds.has(sessionId));
+  const children = import_react2.default.useMemo(() => {
     return childEntriesForParent(sessionSnap, sessionId);
   }, [sessionSnap, sessionId]);
-  const [hostEl, setHostEl] = import_react.default.useState(null);
-  import_react.default.useEffect(() => {
+  const [hostEl, setHostEl] = import_react2.default.useState(null);
+  import_react2.default.useEffect(() => {
     if (!isExpanded || children.length === 0) {
       if (hostEl && hostEl.parentNode) {
         try {
@@ -2721,7 +3738,7 @@ function ADESubagentRowExpander(props) {
   if (children.length === 0) return null;
   const hasRunning = children.some((c) => c.running);
   const portalFn = getPortalFn();
-  const chevronSvg = import_react.default.createElement(
+  const chevronSvg = import_react2.default.createElement(
     "svg",
     {
       width: 10,
@@ -2733,7 +3750,7 @@ function ADESubagentRowExpander(props) {
         transition: "transform 160ms cubic-bezier(0.2, 0.9, 0.3, 1)"
       }
     },
-    import_react.default.createElement("path", {
+    import_react2.default.createElement("path", {
       d: "M3.5 2L6.5 5L3.5 8",
       stroke: "currentColor",
       strokeWidth: 1.4,
@@ -2741,10 +3758,10 @@ function ADESubagentRowExpander(props) {
       strokeLinejoin: "round"
     })
   );
-  return import_react.default.createElement(
-    import_react.default.Fragment,
+  return import_react2.default.createElement(
+    import_react2.default.Fragment,
     null,
-    import_react.default.createElement(
+    import_react2.default.createElement(
       "button",
       {
         type: "button",
@@ -2759,11 +3776,11 @@ function ADESubagentRowExpander(props) {
         }
       },
       chevronSvg,
-      hasRunning ? import_react.default.createElement("span", { "data-ade-subagent-running-dot": "" }) : null,
-      import_react.default.createElement("span", { "data-ade-subagent-count": "" }, String(children.length))
+      hasRunning ? import_react2.default.createElement("span", { "data-ade-subagent-running-dot": "" }) : null,
+      import_react2.default.createElement("span", { "data-ade-subagent-count": "" }, String(children.length))
     ),
     isExpanded && hostEl && portalFn ? portalFn(
-      import_react.default.createElement(ADESubagentChildList, {
+      import_react2.default.createElement(ADESubagentChildList, {
         parentSessionId: sessionId,
         children
       }),
@@ -2773,7 +3790,7 @@ function ADESubagentRowExpander(props) {
 }
 function ADESubagentDeck(props) {
   const { parentId, paneSessionId, useSessionStatus } = props;
-  const snap = (0, import_react.useSyncExternalStore)(subscribeSubagent, getSubagentSnapshot);
+  const snap = (0, import_react2.useSyncExternalStore)(subscribeSubagent, getSubagentSnapshot);
   const sessionSnapshot = readSessionsSnapshot();
   const children = childEntriesForParent(sessionSnapshot, parentId);
   const pinned = snap.pinned && snap.pinned instanceof Map ? snap.pinned : PINNED_STACK_BY_PARENT;
@@ -2796,8 +3813,8 @@ function ADESubagentDeck(props) {
     const paneToClose = (state.panes || []).find((p) => p.sessionId === paneSessionId);
     if (paneToClose) closeSwarmPane(paneSessionId);
   };
-  const trackRef = import_react.default.useRef(null);
-  const [deckScroll, setDeckScroll] = import_react.default.useState({ left: false, right: false });
+  const trackRef = import_react2.default.useRef(null);
+  const [deckScroll, setDeckScroll] = import_react2.default.useState({ left: false, right: false });
   const updateDeckScroll = () => {
     const el = trackRef.current;
     if (!el) return;
@@ -2807,7 +3824,7 @@ function ADESubagentDeck(props) {
       right: max > 0 && el.scrollLeft < max - 1
     });
   };
-  import_react.default.useEffect(() => {
+  import_react2.default.useEffect(() => {
     const el = trackRef.current;
     if (!el) return void 0;
     const onWheel = (e) => {
@@ -2847,7 +3864,7 @@ function ADESubagentDeck(props) {
     el.scrollLeft = Math.max(0, Math.min(next, max));
     if (canScroll) e.preventDefault();
   };
-  return import_react.default.createElement(
+  return import_react2.default.createElement(
     "div",
     {
       "data-ade-subagent-deck": "",
@@ -2865,7 +3882,7 @@ function ADESubagentDeck(props) {
         boxSizing: "border-box"
       }
     },
-    import_react.default.createElement(
+    import_react2.default.createElement(
       "div",
       {
         style: {
@@ -2880,7 +3897,7 @@ function ADESubagentDeck(props) {
           flex: "0 0 auto"
         }
       },
-      children.length > 0 ? import_react.default.createElement("span", {
+      children.length > 0 ? import_react2.default.createElement("span", {
         style: {
           fontSize: 9.5,
           fontWeight: 800,
@@ -2888,7 +3905,7 @@ function ADESubagentDeck(props) {
           color: runningCount > 0 ? "#a7f3d0" : "var(--dsw-alias-label-tertiary, rgba(255,255,255,0.55))"
         }
       }, "SWARM") : null,
-      import_react.default.createElement("span", {
+      import_react2.default.createElement("span", {
         style: {
           fontSize: 10.5,
           fontWeight: 700,
@@ -2897,7 +3914,7 @@ function ADESubagentDeck(props) {
         }
       }, String(children.length))
     ),
-    import_react.default.createElement(
+    import_react2.default.createElement(
       "div",
       {
         "data-ade-subagent-deck-track": "",
@@ -2915,7 +3932,7 @@ function ADESubagentDeck(props) {
         }
       },
       children.map(
-        (child) => import_react.default.createElement(ADESubagentChip, {
+        (child) => import_react2.default.createElement(ADESubagentChip, {
           key: child.id,
           child,
           active: child.id === paneSessionId,
@@ -2925,7 +3942,7 @@ function ADESubagentDeck(props) {
         })
       )
     ),
-    deckScroll.left ? import_react.default.createElement(
+    deckScroll.left ? import_react2.default.createElement(
       "button",
       {
         type: "button",
@@ -2950,7 +3967,7 @@ function ADESubagentDeck(props) {
       },
       adeIcon("chevron-left", 11)
     ) : null,
-    deckScroll.right ? import_react.default.createElement(
+    deckScroll.right ? import_react2.default.createElement(
       "button",
       {
         type: "button",
@@ -2975,10 +3992,10 @@ function ADESubagentDeck(props) {
       },
       adeIcon("chevron-right", 11)
     ) : null,
-    import_react.default.createElement(
+    import_react2.default.createElement(
       "span",
       { style: { display: "inline-flex", alignItems: "center", gap: 4, flex: "0 0 auto", order: 3 } },
-      import_react.default.createElement("button", {
+      import_react2.default.createElement("button", {
         type: "button",
         title: "Dismiss this subagent stack",
         style: {
@@ -3002,7 +4019,7 @@ function ADESubagentParentBadge(props) {
   const sessionSnapshot = readSessionsSnapshot();
   const children = childEntriesForParent(sessionSnapshot, parentId);
   if (!children.length) return null;
-  return import_react.default.createElement(
+  return import_react2.default.createElement(
     "button",
     {
       type: "button",
@@ -3037,26 +4054,26 @@ function ADESplitRoot(props) {
   const SessionProvider = typeof props.SessionProvider === "function" ? props.SessionProvider : cachedSessionProvider;
   if (props.useSessionStatus) cachedUseSessionStatus = props.useSessionStatus;
   const useSessionStatus = props.useSessionStatus || cachedUseSessionStatus;
-  const snap = (0, import_react.useSyncExternalStore)(subscribe, getState);
+  const snap = (0, import_react2.useSyncExternalStore)(subscribe, getState);
   const panes = snap.panes;
   const rawTree = snap.tree;
-  const tree = import_react.default.useMemo(() => ensureTree(rawTree, panes), [rawTree, panes]);
-  const geometry = import_react.default.useMemo(() => computeTreeGeometry(tree ? tree.root : null), [tree]);
-  const [draggingDividerId, setDraggingDividerId] = import_react.default.useState(null);
-  const containerRef = import_react.default.useRef(null);
+  const tree = import_react2.default.useMemo(() => ensureTree(rawTree, panes), [rawTree, panes]);
+  const geometry = import_react2.default.useMemo(() => computeTreeGeometry(tree ? tree.root : null), [tree]);
+  const [draggingDividerId, setDraggingDividerId] = import_react2.default.useState(null);
+  const containerRef = import_react2.default.useRef(null);
   const totalPanes = panes.length;
-  const [mountedCount, setMountedCount] = import_react.default.useState(() => totalPanes > 0 ? 1 : 0);
-  const mountedRef = import_react.default.useRef(mountedCount);
+  const [mountedCount, setMountedCount] = import_react2.default.useState(() => totalPanes > 0 ? 1 : 0);
+  const mountedRef = import_react2.default.useRef(mountedCount);
   mountedRef.current = mountedCount;
-  import_react.default.useEffect(() => {
+  import_react2.default.useEffect(() => {
     if (totalPanes <= 0) return void 0;
     if (mountedRef.current >= totalPanes) return void 0;
     let cancelled = false;
     const step = () => {
       if (cancelled) return;
       mountedRef.current = Math.min(mountedRef.current + 1, totalPanes);
-      if (typeof import_react.default.startTransition === "function") {
-        import_react.default.startTransition(() => setMountedCount(mountedRef.current));
+      if (typeof import_react2.default.startTransition === "function") {
+        import_react2.default.startTransition(() => setMountedCount(mountedRef.current));
       } else {
         setMountedCount(mountedRef.current);
       }
@@ -3068,8 +4085,8 @@ function ADESplitRoot(props) {
       clearTimeout(first);
     };
   }, [totalPanes]);
-  const [metaTick, setMetaTick] = import_react.default.useState(0);
-  import_react.default.useEffect(() => {
+  const [metaTick, setMetaTick] = import_react2.default.useState(0);
+  import_react2.default.useEffect(() => {
     const unsubSessions = app?.sessions?.list?.subscribe?.(() => setMetaTick((t) => t + 1));
     const unsubWs = (app?.workspaces || app?.uiWorkspace?.workspaces)?.list?.subscribe?.(() => setMetaTick((t) => t + 1));
     return () => {
@@ -3077,14 +4094,14 @@ function ADESplitRoot(props) {
       unsubWs?.();
     };
   }, []);
-  import_react.default.useEffect(() => {
+  import_react2.default.useEffect(() => {
     if (typeof props.renderSlot === "function") cachedRenderSlot = props.renderSlot;
     if (typeof props.SessionProvider === "function") cachedSessionProvider = props.SessionProvider;
     if (typeof props.useSessionStatus === "function") cachedUseSessionStatus = props.useSessionStatus;
   }, [props.renderSlot, props.SessionProvider, props.useSessionStatus]);
   if (panes.length === 0) {
     if (originalConversationPanel) {
-      return import_react.default.createElement(originalConversationPanel, props);
+      return import_react2.default.createElement(originalConversationPanel, props);
     }
     return renderSlot ? renderSlot("main.conversation", {}) : null;
   }
@@ -3138,7 +4155,7 @@ function ADESplitRoot(props) {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
-  return import_react.default.createElement(
+  return import_react2.default.createElement(
     "div",
     {
       ref: containerRef,
@@ -3154,7 +4171,7 @@ function ADESplitRoot(props) {
     panes.map((pane, idx) => {
       const rect = geometry.panes[pane.sessionId] || { left: 0, top: 0, width: 100, height: 100 };
       const splitDirection = getImmediateSplitDirection(tree ? tree.root : null, pane.sessionId) || "row";
-      return import_react.default.createElement(ADESplitPaneItem, {
+      return import_react2.default.createElement(ADESplitPaneItem, {
         key: pane.sessionId,
         pane,
         idx,
@@ -3171,7 +4188,7 @@ function ADESplitRoot(props) {
     }),
     geometry.dividers.map((div) => {
       const isRow = div.direction === "row";
-      return import_react.default.createElement("div", {
+      return import_react2.default.createElement("div", {
         key: div.id,
         "data-ade-divider": "",
         "data-ade-dir": div.direction,
@@ -3209,7 +4226,7 @@ function ADESplitPaneItem(props) {
   const title = sessionTitle(pane.sessionId);
   const ws = workspaceOf(pane.sessionId);
   const mounted = idx === 0 || idx < mountedCount;
-  const swarmSnapshot2 = (0, import_react.useSyncExternalStore)(subscribeSubagent, getSubagentSnapshot);
+  const swarmSnapshot2 = (0, import_react2.useSyncExternalStore)(subscribeSubagent, getSubagentSnapshot);
   void swarmSnapshot2;
   const sessionsSnapshot = readSessionsSnapshot();
   const paneParentId = subagentParentOf(sessionsSnapshot, pane.sessionId);
@@ -3223,23 +4240,25 @@ function ADESplitPaneItem(props) {
       return false;
     }
   })();
-  const [isOpen, setIsOpen] = import_react.default.useState(isImmediatelyOpen);
-  const paneElRef = import_react.default.useRef(null);
-  const [viewState, setViewState] = import_react.default.useState({ hasMultiple: false, isTrajectory: false });
-  const inspectTabs = import_react.default.useCallback(() => {
+  const [isOpen, setIsOpen] = import_react2.default.useState(isImmediatelyOpen);
+  const paneElRef = import_react2.default.useRef(null);
+  const [viewState, setViewState] = import_react2.default.useState({ hasMultiple: false, isTrajectory: false, isGraph: false });
+  const inspectTabs = import_react2.default.useCallback(() => {
     const paneEl = paneElRef.current;
     if (!paneEl) return;
     const tabButtons = Array.from(paneEl.querySelectorAll('[data-conversation-tabs] button[role="tab"], [role="tablist"] button[role="tab"]'));
     const hasMore = !!paneEl.querySelector('[aria-haspopup="menu"]');
     const trajectoryBtn = tabButtons.find((b) => ((b.textContent || "") + " " + (b.getAttribute("aria-label") || "")).toLowerCase().includes("trajectory")) || null;
+    const graphBtn = tabButtons.find((b) => ((b.textContent || "") + " " + (b.getAttribute("aria-label") || "")).toLowerCase().includes("graph")) || null;
     const chatBtn = tabButtons.find((b) => /^\s*chat\b/i.test((b.textContent || "").trim())) || tabButtons[0] || null;
     const activeBtn = tabButtons.find((b) => b.getAttribute("aria-selected") === "true") || null;
     const hasMultiple = tabButtons.length > 1 || tabButtons.length >= 1 && hasMore;
     const isTrajectory = trajectoryBtn ? trajectoryBtn.getAttribute("aria-selected") === "true" : activeBtn && activeBtn !== chatBtn;
-    const next = { hasMultiple, isTrajectory: !!isTrajectory };
-    setViewState((prev) => prev.hasMultiple === next.hasMultiple && prev.isTrajectory === next.isTrajectory ? prev : next);
+    const isGraph = graphBtn ? graphBtn.getAttribute("aria-selected") === "true" : false;
+    const next = { hasMultiple, isTrajectory: !!isTrajectory, isGraph: !!isGraph };
+    setViewState((prev) => prev.hasMultiple === next.hasMultiple && prev.isTrajectory === next.isTrajectory && prev.isGraph === next.isGraph ? prev : next);
   }, [pane.sessionId]);
-  import_react.default.useEffect(() => {
+  import_react2.default.useEffect(() => {
     inspectTabs();
     const paneEl = paneElRef.current;
     if (!paneEl || typeof MutationObserver === "undefined") return void 0;
@@ -3277,7 +4296,32 @@ function ADESplitPaneItem(props) {
       }, 80);
     }
   };
-  import_react.default.useEffect(() => {
+  const handleToggleGraph = () => {
+    const paneEl = paneElRef.current;
+    if (!paneEl) return;
+    const tabButtons = Array.from(paneEl.querySelectorAll('[data-conversation-tabs] button[role="tab"], [role="tablist"] button[role="tab"]'));
+    const graphBtn = tabButtons.find((b) => ((b.textContent || "") + " " + (b.getAttribute("aria-label") || "")).toLowerCase().includes("graph")) || null;
+    const chatBtn = tabButtons.find((b) => /^\s*chat\b/i.test((b.textContent || "").trim())) || tabButtons[0] || null;
+    if (graphBtn) {
+      if (graphBtn.getAttribute("aria-selected") === "true") {
+        if (chatBtn) chatBtn.click();
+      } else {
+        graphBtn.click();
+      }
+      inspectTabs();
+      return;
+    }
+    const moreBtn = paneEl.querySelector('button[aria-haspopup="menu"]');
+    if (moreBtn && tabButtons.length >= 1) {
+      moreBtn.click();
+      setTimeout(() => {
+        const items = Array.from(document.querySelectorAll('[role="menu"] a, [role="menu"] button, [role="menuitem"], [role="listbox"] button'));
+        const target = items.find((el) => (el.textContent || "").toLowerCase().includes("graph")) || items[0];
+        if (target) target.click();
+      }, 80);
+    }
+  };
+  import_react2.default.useEffect(() => {
     if (isOpen || !mounted) return void 0;
     let active = true;
     if (ref && ref.ready && typeof ref.ready.then === "function") {
@@ -3285,8 +4329,8 @@ function ADESplitPaneItem(props) {
         if (!active) return;
         requestAnimationFrame(() => {
           if (!active) return;
-          if (typeof import_react.default.startTransition === "function") {
-            import_react.default.startTransition(() => setIsOpen(true));
+          if (typeof import_react2.default.startTransition === "function") {
+            import_react2.default.startTransition(() => setIsOpen(true));
           } else {
             setIsOpen(true);
           }
@@ -3300,11 +4344,11 @@ function ADESplitPaneItem(props) {
     };
   }, [mounted, isOpen, ref]);
   const shouldRenderContent = mounted && isOpen;
-  const pendingPlaceholder = import_react.default.createElement(
+  const pendingPlaceholder = import_react2.default.createElement(
     "div",
     { style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, color: "var(--dsw-alias-fg-l2, rgba(255,255,255,0.45))", font: "13px/1.4 system-ui, sans-serif", background: "var(--dsw-alias-bg-base, #1e1e24)" } },
-    import_react.default.createElement("div", { style: { width: 22, height: 22, borderRadius: "50%", border: "2.5px solid rgba(255,255,255,0.12)", borderTopColor: "var(--dsw-alias-brand, #4f78ff)", animation: "ade-spin 700ms linear infinite" } }),
-    import_react.default.createElement("span", null, "Loading " + title + "...")
+    import_react2.default.createElement("div", { style: { width: 22, height: 22, borderRadius: "50%", border: "2.5px solid rgba(255,255,255,0.12)", borderTopColor: "var(--dsw-alias-brand, #4f78ff)", animation: "ade-spin 700ms linear infinite" } }),
+    import_react2.default.createElement("span", null, "Loading " + title + "...")
   );
   const onHeaderDragStart = (e) => {
     reorderDragFromSessionId = pane.sessionId;
@@ -3334,7 +4378,7 @@ function ADESplitPaneItem(props) {
     const el = document.querySelector(`[data-ade-pane][data-ade-dragging-source="true"]`);
     if (el) el.removeAttribute("data-ade-dragging-source");
   };
-  return import_react.default.createElement(
+  return import_react2.default.createElement(
     "div",
     {
       ref: paneElRef,
@@ -3370,7 +4414,7 @@ function ADESplitPaneItem(props) {
         willChange: "auto"
       }
     },
-    import_react.default.createElement(
+    import_react2.default.createElement(
       "div",
       {
         style: paneHeaderStyle,
@@ -3380,7 +4424,7 @@ function ADESplitPaneItem(props) {
         onDragEnd: onHeaderDragEnd,
         onDragOver: (e) => e.preventDefault()
       },
-      import_react.default.createElement("span", {
+      import_react2.default.createElement("span", {
         draggable: false,
         "data-ade-panedot": "",
         style: {
@@ -3393,7 +4437,7 @@ function ADESplitPaneItem(props) {
           pointerEvents: "none"
         }
       }),
-      ws?.title ? import_react.default.createElement(
+      ws?.title ? import_react2.default.createElement(
         "span",
         {
           draggable: false,
@@ -3418,16 +4462,16 @@ function ADESplitPaneItem(props) {
         },
         ws.title
       ) : null,
-      import_react.default.createElement("span", { style: paneTitleStyle, draggable: false }, title),
-      import_react.default.createElement(ADEPaneTelemetry, {
+      import_react2.default.createElement("span", { style: paneTitleStyle, draggable: false }, title),
+      import_react2.default.createElement(ADEPaneTelemetry, {
         sessionId: pane.sessionId,
         useSessionStatus
       }),
-      parentChildren.length > 0 ? import_react.default.createElement(ADESubagentParentBadge, {
+      parentChildren.length > 0 ? import_react2.default.createElement(ADESubagentParentBadge, {
         parentId: pane.sessionId,
         onClick: () => openSubagentStack(pane.sessionId)
       }) : null,
-      viewState.hasMultiple ? import_react.default.createElement("button", {
+      viewState.hasMultiple ? import_react2.default.createElement("button", {
         type: "button",
         style: {
           ...closeButtonStyle,
@@ -3440,7 +4484,20 @@ function ADESplitPaneItem(props) {
         onDragStart: (e) => e.preventDefault(),
         onClick: handleToggleTrajectory
       }, adeIcon("trajectory", 12)) : null,
-      import_react.default.createElement("button", {
+      viewState.hasMultiple ? import_react2.default.createElement("button", {
+        type: "button",
+        style: {
+          ...closeButtonStyle,
+          color: viewState.isGraph ? "var(--dsw-alias-brand, #4f78ff)" : "var(--dsw-alias-fg-l3, rgba(255,255,255,0.45))"
+        },
+        "aria-label": viewState.isGraph ? "Switch to chat view" : "Switch to graph view",
+        title: viewState.isGraph ? "Show chat" : "Show graph",
+        "aria-pressed": viewState.isGraph,
+        draggable: false,
+        onDragStart: (e) => e.preventDefault(),
+        onClick: handleToggleGraph
+      }, adeIcon("graph", 12)) : null,
+      import_react2.default.createElement("button", {
         type: "button",
         style: { ...closeButtonStyle, fontWeight: 700 },
         "aria-label": splitDirection === "col" ? "Split side by side (horizontal)" : "Split stacked (vertical)",
@@ -3449,7 +4506,7 @@ function ADESplitPaneItem(props) {
         onDragStart: (e) => e.preventDefault(),
         onClick: () => togglePaneSplit2(pane.sessionId)
       }, adeIcon(splitDirection === "col" ? "split-cols" : "split-rows", 12)),
-      import_react.default.createElement("button", {
+      import_react2.default.createElement("button", {
         type: "button",
         style: closeButtonStyle,
         "aria-label": "Close pane",
@@ -3458,21 +4515,21 @@ function ADESplitPaneItem(props) {
         onClick: () => closePane(pane.sessionId)
       }, adeIcon("close", 12))
     ),
-    stackChildren.length > 0 ? import_react.default.createElement(ADESubagentDeck, {
+    stackChildren.length > 0 ? import_react2.default.createElement(ADESubagentDeck, {
       parentId: paneParentId,
       paneSessionId: pane.sessionId,
       useSessionStatus
     }) : null,
-    import_react.default.createElement(
+    import_react2.default.createElement(
       "div",
       { style: { flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column" } },
-      import_react.default.createElement(
-        import_react.default.Suspense,
+      import_react2.default.createElement(
+        import_react2.default.Suspense,
         { fallback: pendingPlaceholder },
-        shouldRenderContent ? import_react.default.createElement(
+        shouldRenderContent ? import_react2.default.createElement(
           PaneErrorBoundary,
           null,
-          import_react.default.createElement(SessionProvider, { session: ref }, renderSlot("main.conversation", {}))
+          import_react2.default.createElement(SessionProvider, { session: ref }, renderSlot("main.conversation", {}))
         ) : pendingPlaceholder
       )
     )
@@ -3554,10 +4611,14 @@ function apply(ctx) {
   ensureSidebarWrapped();
   ensureAliasRegistered();
   ensureSubagentRowActionRegistered();
+  ensureGraphViewRegistered();
+  ensureGraphMainRegistered();
   if (pluginCtx && pluginCtx.slots && pluginCtx.slots.subscribe) {
     pluginCtx.slots.subscribe("sidebar.workspaces", ensureSidebarWrapped);
     pluginCtx.slots.subscribe("main", ensureConversationWrapped);
     pluginCtx.slots.subscribe("sidebar.workspaces.session.row.action", ensureSubagentRowActionRegistered);
+    pluginCtx.slots.subscribe("conversation.view", ensureGraphViewRegistered);
+    pluginCtx.slots.subscribe("main", ensureGraphMainRegistered);
   }
   restorePersistedSplit();
   const seedKnownSubagentIds = () => {
@@ -3854,6 +4915,7 @@ function apply(ctx) {
       restoreSidebar();
       disposeAlias();
       disposeSubagentRowAction();
+      disposeGraphRegistrations();
       if (typeof unsub === "function") unsub();
       if (typeof subagentUnsub === "function") subagentUnsub();
       for (const id of [...retained.keys()]) releaseReference(id);
@@ -3872,6 +4934,7 @@ function apply(ctx) {
     restoreSidebar();
     disposeAlias();
     disposeSubagentRowAction();
+    disposeGraphRegistrations();
     if (typeof subagentUnsub === "function") subagentUnsub();
     for (const id of [...retained.keys()]) releaseReference(id);
     app = null;
