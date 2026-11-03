@@ -512,7 +512,51 @@ function refreshHandles() {
 }
 var retained = /* @__PURE__ */ new Map();
 var regState = "init";
-function debugLog(_msg) {
+var ADE_DEBUG = true;
+var debugBuffer = [];
+var debugVersion = 0;
+var debugSubs = /* @__PURE__ */ new Set();
+function debugLog(tag, detail) {
+  if (!ADE_DEBUG) return;
+  let text;
+  try {
+    text = detail == null ? "" : typeof detail === "string" ? detail : JSON.stringify(detail);
+  } catch (_) {
+    text = String(detail);
+  }
+  const entry = { t: Date.now() % 1e6, tag, detail: text };
+  debugBuffer.push(entry);
+  if (debugBuffer.length > 160) debugBuffer.shift();
+  debugVersion += 1;
+  try {
+    console.log(
+      "%c[ADE]%c " + tag + " %c" + text,
+      "color:#38bdf8;font-weight:bold",
+      "color:inherit",
+      "color:#94a3b8"
+    );
+  } catch (_) {
+    console.log("[ADE] " + tag + " " + text);
+  }
+  for (const cb of debugSubs) {
+    try {
+      cb(debugVersion);
+    } catch (_) {
+    }
+  }
+}
+function getDebugSnapshot() {
+  return { version: debugVersion, entries: debugBuffer.slice() };
+}
+if (typeof window !== "undefined") {
+  window.__adeDump = () => {
+    try {
+      console.table(debugBuffer.slice(-40).map((e) => ({ tag: e.tag, detail: e.detail })));
+    } catch (_) {
+    }
+    return getDebugSnapshot();
+  };
+  window.__adeState = () => state;
 }
 function currentMainSessionId() {
   if (!app || !app.sessions) return void 0;
@@ -618,15 +662,10 @@ function accentFor(sessionId) {
 function setTree(tree) {
   const activeIds = getTreePaneIds(tree ? tree.root : null);
   const existingMap = new Map(state.panes.map((p) => [p.sessionId, p]));
-  const preserved = state.panes.filter((p) => activeIds.includes(p.sessionId));
-  for (const id of activeIds) {
-    if (!existingMap.has(id)) {
-      preserved.push({ sessionId: id });
-    }
-  }
+  const nextPanes = activeIds.map((id) => existingMap.get(id) || { sessionId: id });
   state = {
     tree,
-    panes: preserved
+    panes: nextPanes
   };
   emit();
   persistActiveState();
@@ -774,9 +813,15 @@ function ensureTree(rawTree, panes) {
   const paneIds = panes.map((p) => p.sessionId);
   if (rawTree && rawTree.root) {
     const treeIds = getTreePaneIds(rawTree.root);
-    const same = treeIds.length === paneIds.length && treeIds.every((id, i) => id === paneIds[i]);
-    if (same) return rawTree;
+    if (treeIds.length === paneIds.length) {
+      const set = new Set(paneIds);
+      if (treeIds.every((id) => set.has(id))) {
+        debugLog("ensureTree", { action: "keep-rawTree", treeIds, paneIds });
+        return rawTree;
+      }
+    }
   }
+  debugLog("ensureTree", { action: "rebuild-fallback", paneIds });
   let tree = { root: { kind: "pane", id: paneIds[0] } };
   for (let i = 1; i < paneIds.length; i++) {
     tree = insertOrSplit(tree, paneIds[i], paneIds[i - 1], "right");
@@ -1842,6 +1887,7 @@ function ADESplitPaneItem(props) {
   );
   const onHeaderDragStart = (e) => {
     reorderDragFromSessionId = pane.sessionId;
+    debugLog("header.dragstart", { source: pane.sessionId, x: e.clientX, y: e.clientY });
     if (e.dataTransfer) {
       try {
         e.dataTransfer.effectAllowed = "move";
@@ -2090,6 +2136,7 @@ function apply(ctx) {
       if (!id) return;
       pendingSessionId = id;
       dropHandled = false;
+      debugLog("sidebar.dragstart", { id, x: e.clientX, y: e.clientY });
       if (e.dataTransfer) {
         try {
           e.dataTransfer.effectAllowed = "move";
@@ -2110,12 +2157,15 @@ function apply(ctx) {
     if (!dragSessionId && !isReorder) return;
     const probe = document.querySelector("[data-ade-split]") || document.querySelector(".mP3x-q_centerCol") || document.querySelector("[data-conversation-content]");
     let newOverCenter = e.clientX > 240;
+    let probeRect = null;
     if (probe) {
       const r = probe.getBoundingClientRect();
+      probeRect = r;
       newOverCenter = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
     }
     overCenter = newOverCenter;
     if (!overCenter) {
+      if (currentTargetSessionId !== null) debugLog("dragover.exit", { x: e.clientX, y: e.clientY, probe: probeRect && { left: probeRect.left, top: probeRect.top, right: probeRect.right, bottom: probeRect.bottom } });
       hideOverlay();
       currentTargetSessionId = null;
       currentTargetZone = null;
@@ -2204,8 +2254,21 @@ function apply(ctx) {
     ov.textContent = `${sourceName} \u2192 ${actionLabel}`;
   };
   const onDrop = (e) => {
+    debugLog("drop", {
+      overCenter,
+      target: currentTargetSessionId,
+      zone: currentTargetZone,
+      reorderSource: reorderDragFromSessionId,
+      pending: pendingSessionId,
+      x: e.clientX,
+      y: e.clientY,
+      types: e.dataTransfer && e.dataTransfer.types ? Array.from(e.dataTransfer.types) : []
+    });
     hideOverlay();
-    if (!overCenter) return;
+    if (!overCenter) {
+      debugLog("drop.bail", "overCenter=false");
+      return;
+    }
     const targetSessionId = currentTargetSessionId;
     const zone = currentTargetZone;
     currentTargetSessionId = null;
@@ -2216,13 +2279,18 @@ function apply(ctx) {
       e.preventDefault();
       e.stopPropagation();
       dropHandled = true;
-      if (!targetSessionId || targetSessionId === sourceId || !zone) return;
+      if (!targetSessionId || targetSessionId === sourceId || !zone) {
+        debugLog("drop.bail", { reason: "bad-reorder-target", targetSessionId, sourceId, zone });
+        return;
+      }
       const currentTree = ensureTree(state.tree, state.panes);
       if (zone === "center") {
         const nextTree = swapTreePanes(currentTree, sourceId, targetSessionId);
+        debugLog("drop.swap", { sourceId, targetSessionId });
         setTree(nextTree);
       } else {
         const nextTree = insertOrSplit(currentTree, sourceId, targetSessionId, zone);
+        debugLog("drop.move", { sourceId, targetSessionId, zone });
         setTree(nextTree);
       }
       return;
@@ -2262,6 +2330,7 @@ function apply(ctx) {
     }
   };
   const onDragEnd = () => {
+    debugLog("dragend", { dropHandled, reorderSource: reorderDragFromSessionId, pending: pendingSessionId });
     hideOverlay();
     currentTargetSessionId = null;
     currentTargetZone = null;
