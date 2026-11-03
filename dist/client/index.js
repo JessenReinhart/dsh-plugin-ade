@@ -962,13 +962,14 @@ function ADENodeGraphCanvas(props) {
           });
           const packet1 = import_react.default.createElement(
             "circle",
-            { r: 5, fill: "#7dffc9", style: { filter: "drop-shadow(0 0 6px rgba(52, 211, 153, 0.9))" } },
+            { r: 5, fill: "oklch(0.85 0.18 160)", style: { filter: "drop-shadow(0 0 6px rgba(52, 211, 153, 0.9))" } },
             import_react.default.createElement(
               "animateMotion",
               {
                 dur: "1.6s",
                 repeatCount: "indefinite",
                 path: d,
+                calcMode: "linear",
                 keyPoints: "0;1",
                 keyTimes: "0;1"
               }
@@ -976,7 +977,7 @@ function ADENodeGraphCanvas(props) {
           );
           const packet2 = import_react.default.createElement(
             "circle",
-            { r: 3.2, fill: "#f0fff9", opacity: 0.85 },
+            { r: 3.2, fill: "oklch(0.97 0.03 160)", opacity: 0.85 },
             import_react.default.createElement(
               "animateMotion",
               {
@@ -984,6 +985,7 @@ function ADENodeGraphCanvas(props) {
                 begin: "0.8s",
                 repeatCount: "indefinite",
                 path: d,
+                calcMode: "linear",
                 keyPoints: "0;1",
                 keyTimes: "0;1"
               }
@@ -3043,7 +3045,7 @@ function injectMotionStyles() {
         visibility: visible !important;
       }
       /* Other sibling actions inside rowActions remain hover-only */
-      [class*="sessionRow"]:not(:hover) [class*="rowActions"] > button:not([data-ade-subagent-expander]) {
+[class*="sessionRow"]:has([data-ade-subagent-expander]):not(:hover) [class*="rowActions"] > button:not([data-ade-subagent-expander]) {
         opacity: 0 !important;
         pointer-events: none !important;
       }
@@ -3155,7 +3157,10 @@ function injectMotionStyles() {
       @media (prefers-reduced-motion: reduce) {
         [data-ade-split] [data-ade-pane],
         [data-ade-split] > [data-ade-divider]::before,
-        #dsh-ade-drag-preview {
+        #dsh-ade-drag-preview,
+        [data-ade-wire],
+        [data-ade-node-chat],
+        [data-node-card] {
           animation: none !important;
           transition: none !important;
         }

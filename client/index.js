@@ -1385,7 +1385,7 @@ function injectMotionStyles() {
         visibility: visible !important;
       }
       /* Other sibling actions inside rowActions remain hover-only */
-      [class*="sessionRow"]:not(:hover) [class*="rowActions"] > button:not([data-ade-subagent-expander]) {
+[class*="sessionRow"]:has([data-ade-subagent-expander]):not(:hover) [class*="rowActions"] > button:not([data-ade-subagent-expander]) {
         opacity: 0 !important;
         pointer-events: none !important;
       }
@@ -1497,7 +1497,10 @@ function injectMotionStyles() {
       @media (prefers-reduced-motion: reduce) {
         [data-ade-split] [data-ade-pane],
         [data-ade-split] > [data-ade-divider]::before,
-        #dsh-ade-drag-preview {
+        #dsh-ade-drag-preview,
+        [data-ade-wire],
+        [data-ade-node-chat],
+        [data-node-card] {
           animation: none !important;
           transition: none !important;
         }

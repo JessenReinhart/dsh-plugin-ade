@@ -1031,20 +1031,21 @@ export function ADENodeGraphCanvas(props) {
             },
           });
 
-          const packet1 = React.createElement('circle', { r: 5, fill: '#7dffc9', style: { filter: 'drop-shadow(0 0 6px rgba(52, 211, 153, 0.9))' } },
+          const packet1 = React.createElement('circle', { r: 5, fill: 'oklch(0.85 0.18 160)', style: { filter: 'drop-shadow(0 0 6px rgba(52, 211, 153, 0.9))' } },
             React.createElement(
               'animateMotion',
               {
                 dur: '1.6s',
                 repeatCount: 'indefinite',
                 path: d,
+                calcMode: 'linear',
                 keyPoints: '0;1',
                 keyTimes: '0;1',
               },
             )
           );
 
-          const packet2 = React.createElement('circle', { r: 3.2, fill: '#f0fff9', opacity: 0.85 },
+          const packet2 = React.createElement('circle', { r: 3.2, fill: 'oklch(0.97 0.03 160)', opacity: 0.85 },
             React.createElement(
               'animateMotion',
               {
@@ -1052,6 +1053,7 @@ export function ADENodeGraphCanvas(props) {
                 begin: '0.8s',
                 repeatCount: 'indefinite',
                 path: d,
+                calcMode: 'linear',
                 keyPoints: '0;1',
                 keyTimes: '0;1',
               },
