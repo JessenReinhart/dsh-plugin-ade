@@ -1175,6 +1175,72 @@ function injectMotionStyles() {
       [data-ade-split] [data-ade-pane] [data-conversation-content] {
         background: transparent !important;
       }
+      /* Compact native header inside ADE split panes */
+      [data-ade-split] [data-ade-pane] header[data-window-drag],
+      [data-ade-split] [data-ade-pane] [data-conversation-session] > header,
+      [data-ade-split] [data-ade-pane] [data-conversation-session] header {
+        min-height: 0 !important;
+        height: auto !important;
+        padding: 4px 10px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+        background: transparent !important;
+        grid-template-columns: 1fr !important;
+      }
+      /* Hide leading sidebar toggle and corner explorer toggle in split panes */
+      [data-ade-split] [data-ade-pane] [data-conversation-header-leading],
+      [data-ade-split] [data-ade-pane] header [class*="headerLeading"],
+      [data-ade-split] [data-ade-pane] [data-conversation-header-corner],
+      [data-ade-split] [data-ade-pane] header [class*="headerCorner"] {
+        display: none !important;
+      }
+      /* Hide native session crumbs/title in split panes (ADE header displays title) */
+      [data-ade-split] [data-ade-pane] header nav[aria-label],
+      [data-ade-split] [data-ade-pane] header [class*="crumbs"],
+      [data-ade-split] [data-ade-pane] header [class*="crumbSeg"] {
+        display: none !important;
+      }
+      /* Hide native conversation tabs inside split panes */
+      [data-ade-split] [data-ade-pane] [data-conversation-tabs],
+      [data-ade-split] [data-ade-pane] header [role="tablist"],
+      [data-ade-split] [data-ade-pane] header [class*="tabs"] {
+        display: none !important;
+      }
+      /* Flatten titleRow container layout */
+      [data-ade-split] [data-ade-pane] [class*="titleRow"] {
+        min-height: 26px !important;
+        padding-inline-start: 0 !important;
+        width: 100% !important;
+        display: flex !important;
+        justify-content: flex-start !important;
+        align-items: center !important;
+        gap: 6px !important;
+      }
+      [data-ade-split] [data-ade-pane] [class*="titleCluster"] {
+        flex: 1 !important;
+        min-width: 0 !important;
+        display: flex !important;
+        justify-content: flex-start !important;
+        align-items: center !important;
+        gap: 6px !important;
+      }
+      /* Retain action buttons (preset selector, subagents dropdown, jobs) on the left */
+      [data-ade-split] [data-ade-pane] header [class*="headerActions"],
+      [data-ade-split] [data-ade-pane] [data-conversation-session] [class*="headerActions"] {
+        display: flex !important;
+        align-items: center !important;
+        gap: 6px !important;
+      }
+      /* Retain utilities (e.g. open in app, schedule) pushed to the right */
+      [data-ade-split] [data-ade-pane] header [class*="headerUtilities"],
+      [data-ade-split] [data-ade-pane] [data-conversation-session] [class*="headerUtilities"] {
+        margin-left: auto !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 4px !important;
+      }
       [data-ade-split] [data-ade-pane][data-ade-hypr-anim] {
         animation: ade-hypr-pop-in 240ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
       }
@@ -1679,6 +1745,15 @@ function adeIcon(type, size) {
         { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
         import_react.default.createElement("rect", { x: 1, y: 1.5, width: 5.2, height: 11, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 }),
         import_react.default.createElement("rect", { x: 7.8, y: 1.5, width: 5.2, height: 11, rx: 1.5, stroke: "currentColor", strokeWidth: 1.2, fill: "currentColor", fillOpacity: 0.18 })
+      );
+    case "trajectory":
+      return import_react.default.createElement(
+        "svg",
+        { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
+        import_react.default.createElement("circle", { cx: 3, cy: 11, r: 1.5, fill: "currentColor" }),
+        import_react.default.createElement("circle", { cx: 7, cy: 6.5, r: 1.2, fill: "currentColor" }),
+        import_react.default.createElement("circle", { cx: 11, cy: 3, r: 1.5, fill: "currentColor" }),
+        import_react.default.createElement("path", { d: "M3 11 C 3 6.5, 5 6.5, 7 6.5 S 11 6.5, 11 3", ...stroke })
       );
     default:
       return null;
@@ -2763,6 +2838,59 @@ function ADESplitPaneItem(props) {
     }
   })();
   const [isOpen, setIsOpen] = import_react.default.useState(isImmediatelyOpen);
+  const paneElRef = import_react.default.useRef(null);
+  const [viewState, setViewState] = import_react.default.useState({ hasMultiple: false, isTrajectory: false });
+  const inspectTabs = import_react.default.useCallback(() => {
+    const paneEl = paneElRef.current;
+    if (!paneEl) return;
+    const tabButtons = Array.from(paneEl.querySelectorAll('[data-conversation-tabs] button[role="tab"], [role="tablist"] button[role="tab"]'));
+    const hasMore = !!paneEl.querySelector('[aria-haspopup="menu"]');
+    const trajectoryBtn = tabButtons.find((b) => ((b.textContent || "") + " " + (b.getAttribute("aria-label") || "")).toLowerCase().includes("trajectory")) || null;
+    const chatBtn = tabButtons.find((b) => /^\s*chat\b/i.test((b.textContent || "").trim())) || tabButtons[0] || null;
+    const activeBtn = tabButtons.find((b) => b.getAttribute("aria-selected") === "true") || null;
+    const hasMultiple = tabButtons.length > 1 || tabButtons.length >= 1 && hasMore;
+    const isTrajectory = trajectoryBtn ? trajectoryBtn.getAttribute("aria-selected") === "true" : activeBtn && activeBtn !== chatBtn;
+    const next = { hasMultiple, isTrajectory: !!isTrajectory };
+    setViewState((prev) => prev.hasMultiple === next.hasMultiple && prev.isTrajectory === next.isTrajectory ? prev : next);
+  }, [pane.sessionId]);
+  import_react.default.useEffect(() => {
+    inspectTabs();
+    const paneEl = paneElRef.current;
+    if (!paneEl || typeof MutationObserver === "undefined") return void 0;
+    const observer = new MutationObserver(() => inspectTabs());
+    observer.observe(paneEl, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["aria-selected", "class"]
+    });
+    return () => observer.disconnect();
+  }, [inspectTabs]);
+  const handleToggleTrajectory = () => {
+    const paneEl = paneElRef.current;
+    if (!paneEl) return;
+    const tabButtons = Array.from(paneEl.querySelectorAll('[data-conversation-tabs] button[role="tab"], [role="tablist"] button[role="tab"]'));
+    const trajectoryBtn = tabButtons.find((b) => ((b.textContent || "") + " " + (b.getAttribute("aria-label") || "")).toLowerCase().includes("trajectory")) || null;
+    const chatBtn = tabButtons.find((b) => /^\s*chat\b/i.test((b.textContent || "").trim())) || tabButtons[0] || null;
+    if (trajectoryBtn) {
+      if (trajectoryBtn.getAttribute("aria-selected") === "true") {
+        if (chatBtn) chatBtn.click();
+      } else {
+        trajectoryBtn.click();
+      }
+      inspectTabs();
+      return;
+    }
+    const moreBtn = paneEl.querySelector('button[aria-haspopup="menu"]');
+    if (moreBtn && tabButtons.length >= 1) {
+      moreBtn.click();
+      setTimeout(() => {
+        const items = Array.from(document.querySelectorAll('[role="menu"] a, [role="menu"] button, [role="menuitem"], [role="listbox"] button'));
+        const target = items.find((el) => (el.textContent || "").toLowerCase().includes("trajectory")) || items[0];
+        if (target) target.click();
+      }, 80);
+    }
+  };
   import_react.default.useEffect(() => {
     if (isOpen || !mounted) return void 0;
     let active = true;
@@ -2823,6 +2951,7 @@ function ADESplitPaneItem(props) {
   return import_react.default.createElement(
     "div",
     {
+      ref: paneElRef,
       "data-ade-pane": "",
       "data-ade-session-id": pane.sessionId,
       "data-ade-slot": String(idx),
@@ -2912,7 +3041,21 @@ function ADESplitPaneItem(props) {
         parentId: pane.sessionId,
         onClick: () => openSubagentStack(pane.sessionId)
       }) : null,
+      viewState.hasMultiple ? import_react.default.createElement("button", {
+        type: "button",
+        style: {
+          ...closeButtonStyle,
+          color: viewState.isTrajectory ? "var(--dsw-alias-brand, #4f78ff)" : "var(--dsw-alias-fg-l3, rgba(255,255,255,0.45))"
+        },
+        "aria-label": viewState.isTrajectory ? "Switch to chat view" : "Switch to trajectory view",
+        title: viewState.isTrajectory ? "Show chat" : "Show trajectory",
+        "aria-pressed": viewState.isTrajectory,
+        draggable: false,
+        onDragStart: (e) => e.preventDefault(),
+        onClick: handleToggleTrajectory
+      }, adeIcon("trajectory", 12)) : null,
       import_react.default.createElement("button", {
+        type: "button",
         style: { ...closeButtonStyle, fontWeight: 700 },
         "aria-label": splitDirection === "col" ? "Split side by side (horizontal)" : "Split stacked (vertical)",
         title: splitDirection === "col" ? "Switch this split to side-by-side" : "Switch this split to stacked",
@@ -2921,6 +3064,7 @@ function ADESplitPaneItem(props) {
         onClick: () => togglePaneSplit2(pane.sessionId)
       }, adeIcon(splitDirection === "col" ? "split-cols" : "split-rows", 12)),
       import_react.default.createElement("button", {
+        type: "button",
         style: closeButtonStyle,
         "aria-label": "Close pane",
         draggable: false,
