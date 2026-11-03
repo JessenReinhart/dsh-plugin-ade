@@ -1282,6 +1282,23 @@ function injectMotionStyles() {
         flex-wrap: wrap;
         padding: 1px 2px;
       }
+      [data-ade-subagent-deck-track] {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+      }
+      [data-ade-subagent-deck-track]::-webkit-scrollbar {
+        height: 5px;
+      }
+      [data-ade-subagent-deck-track]::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      [data-ade-subagent-deck-track]::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.22);
+        border-radius: 999px;
+      }
+      [data-ade-subagent-tab] {
+        scroll-snap-align: start;
+      }
       [data-ade-preset-btn] {
         width: 28px;
         height: 28px;
@@ -1591,6 +1608,12 @@ function adeIcon(type, size) {
         "svg",
         { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
         import_react.default.createElement("path", { d: "M5 2.5 9.5 7l-4.5 4.5", ...stroke })
+      );
+    case "chevron-left":
+      return import_react.default.createElement(
+        "svg",
+        { width: px, height: px, viewBox: "0 0 14 14", fill: "none", style },
+        import_react.default.createElement("path", { d: "M9 2.5 4.5 7l4.5 4.5", ...stroke })
       );
     case "chevron-down":
       return import_react.default.createElement(
@@ -2203,10 +2226,17 @@ function ADESubagentChip(props) {
   const pending = !!(status && status.pendingInteraction);
   const dotColor = running ? "#34d399" : pending ? "#f59e0b" : "rgba(255, 255, 255, 0.38)";
   const glowColor = running ? "rgba(52, 211, 153, 0.5)" : pending ? "rgba(245, 158, 11, 0.5)" : "transparent";
+  const chipRef = import_react.default.useRef(null);
+  import_react.default.useEffect(() => {
+    if (active && chipRef.current) {
+      chipRef.current.scrollIntoView({ inline: "nearest", block: "nearest" });
+    }
+  }, [active]);
   return import_react.default.createElement(
     "button",
     {
       key: child.id,
+      ref: chipRef,
       type: "button",
       "data-ade-subagent-tab": active ? "active" : "",
       "data-status": running ? "running" : pending ? "pending" : "idle",
@@ -2305,6 +2335,57 @@ function ADESubagentDeck(props) {
     const paneToClose = (state.panes || []).find((p) => p.sessionId === paneSessionId);
     if (paneToClose) closeSwarmPane(paneSessionId);
   };
+  const trackRef = import_react.default.useRef(null);
+  const [deckScroll, setDeckScroll] = import_react.default.useState({ left: false, right: false });
+  const updateDeckScroll = () => {
+    const el = trackRef.current;
+    if (!el) return;
+    const max = el.scrollWidth - el.clientWidth;
+    setDeckScroll({
+      left: el.scrollLeft > 1,
+      right: max > 0 && el.scrollLeft < max - 1
+    });
+  };
+  import_react.default.useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return void 0;
+    const onWheel = (e) => {
+      if (el.scrollWidth <= el.clientWidth) return;
+      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      if (!delta) return;
+      const max = el.scrollWidth - el.clientWidth;
+      if (delta < 0 && el.scrollLeft <= 0 || delta > 0 && el.scrollLeft >= max) return;
+      e.preventDefault();
+      el.scrollLeft += delta;
+      updateDeckScroll();
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("scroll", updateDeckScroll, { passive: true });
+    updateDeckScroll();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(updateDeckScroll) : null;
+    if (ro) ro.observe(el);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("scroll", updateDeckScroll);
+      if (ro) ro.disconnect();
+    };
+  }, [children.length]);
+  const nudgeDeck = (dir) => {
+    const el = trackRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * 140, behavior: "smooth" });
+  };
+  const handleDeckWheel = (e) => {
+    const el = e.currentTarget;
+    if (!el || el.scrollWidth <= el.clientWidth) return;
+    const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+    if (!delta) return;
+    const max = el.scrollWidth - el.clientWidth;
+    const next = el.scrollLeft + delta;
+    const canScroll = next > 0 && next < max;
+    el.scrollLeft = Math.max(0, Math.min(next, max));
+    if (canScroll) e.preventDefault();
+  };
   return import_react.default.createElement(
     "div",
     {
@@ -2358,6 +2439,8 @@ function ADESubagentDeck(props) {
     import_react.default.createElement(
       "div",
       {
+        "data-ade-subagent-deck-track": "",
+        ref: trackRef,
         style: {
           display: "flex",
           alignItems: "center",
@@ -2366,7 +2449,8 @@ function ADESubagentDeck(props) {
           overflowY: "hidden",
           flex: "1 1 auto",
           minWidth: 0,
-          scrollbarWidth: "none"
+          paddingBottom: 4,
+          scrollSnapType: "x proximity"
         }
       },
       children.map(
@@ -2380,9 +2464,59 @@ function ADESubagentDeck(props) {
         })
       )
     ),
+    deckScroll.left ? import_react.default.createElement(
+      "button",
+      {
+        type: "button",
+        title: "Scroll subagent tabs left",
+        draggable: false,
+        onClick: () => nudgeDeck(-1),
+        style: {
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 20,
+          height: 20,
+          padding: 0,
+          borderRadius: 999,
+          background: "rgba(255, 255, 255, 0.06)",
+          border: "1px solid rgba(255, 255, 255, 0.1)",
+          color: "rgba(255, 255, 255, 0.75)",
+          cursor: "pointer",
+          flex: "0 0 auto",
+          order: 0
+        }
+      },
+      adeIcon("chevron-left", 11)
+    ) : null,
+    deckScroll.right ? import_react.default.createElement(
+      "button",
+      {
+        type: "button",
+        title: "Scroll subagent tabs right",
+        draggable: false,
+        onClick: () => nudgeDeck(1),
+        style: {
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 20,
+          height: 20,
+          padding: 0,
+          borderRadius: 999,
+          background: "rgba(255, 255, 255, 0.06)",
+          border: "1px solid rgba(255, 255, 255, 0.1)",
+          color: "rgba(255, 255, 255, 0.75)",
+          cursor: "pointer",
+          flex: "0 0 auto",
+          order: 2
+        }
+      },
+      adeIcon("chevron-right", 11)
+    ) : null,
     import_react.default.createElement(
       "span",
-      { style: { display: "inline-flex", alignItems: "center", gap: 4, flex: "0 0 auto" } },
+      { style: { display: "inline-flex", alignItems: "center", gap: 4, flex: "0 0 auto", order: 3 } },
       import_react.default.createElement("button", {
         type: "button",
         title: "Dismiss this subagent stack",
