@@ -100,9 +100,9 @@ function removeNode(node, paneId) {
     sizes: normalizeSizes(sizes)
   };
 }
-function removePane(tree2, paneId) {
-  if (!tree2 || !tree2.root) return { root: null };
-  return { root: removeNode(tree2.root, paneId) };
+function removePane(tree, paneId) {
+  if (!tree || !tree.root) return { root: null };
+  return { root: removeNode(tree.root, paneId) };
 }
 function splitForZone(target, source, zone, inheritedDirection) {
   let direction = inheritedDirection;
@@ -154,15 +154,15 @@ function replaceInNode(node, targetId, source, zone, inheritedDirection = "row")
   if (!replaced) return { node, replaced: false };
   return { node: { ...node, children }, replaced: true };
 }
-function insertOrSplit(tree2, sourceId, targetId, zone) {
-  if (!tree2 || !tree2.root) {
+function insertOrSplit(tree, sourceId, targetId, zone) {
+  if (!tree || !tree.root) {
     return { root: { kind: "pane", id: sourceId } };
   }
-  if (sourceId === targetId) return tree2;
+  if (sourceId === targetId) return tree;
   const source = { kind: "pane", id: sourceId };
-  let workingTree = tree2;
-  if (containsPane(tree2.root, sourceId)) {
-    workingTree = { root: removeNode(tree2.root, sourceId) };
+  let workingTree = tree;
+  if (containsPane(tree.root, sourceId)) {
+    workingTree = { root: removeNode(tree.root, sourceId) };
   }
   if (!workingTree.root) {
     return { root: source };
@@ -197,9 +197,9 @@ function toggleImmediateSplit(node, paneId) {
     direction: node.direction === "col" ? "row" : "col"
   };
 }
-function togglePaneSplit(tree2, paneId) {
-  if (!tree2 || !tree2.root) return tree2;
-  return { root: toggleImmediateSplit(tree2.root, paneId) };
+function togglePaneSplit(tree, paneId) {
+  if (!tree || !tree.root) return tree;
+  return { root: toggleImmediateSplit(tree.root, paneId) };
 }
 function getImmediateSplitDirection(node, paneId) {
   if (!node || node.kind === "pane") return null;
@@ -220,9 +220,9 @@ function swapPanes(node, aId, bId) {
   }
   return { ...node, children: node.children.map((c) => swapPanes(c, aId, bId)) };
 }
-function swapTreePanes(tree2, aId, bId) {
-  if (!tree2 || !tree2.root || aId === bId) return tree2;
-  return { root: swapPanes(tree2.root, aId, bId) };
+function swapTreePanes(tree, aId, bId) {
+  if (!tree || !tree.root || aId === bId) return tree;
+  return { root: swapPanes(tree.root, aId, bId) };
 }
 function updateSplitSizes(node, splitId, newSizes) {
   if (!node) return null;
@@ -233,9 +233,9 @@ function updateSplitSizes(node, splitId, newSizes) {
   const nextChildren = node.children.map((c) => updateSplitSizes(c, splitId, newSizes));
   return { ...node, children: nextChildren };
 }
-function updateTreeSizes(tree2, splitId, newSizes) {
-  if (!tree2 || !tree2.root) return tree2;
-  return { root: updateSplitSizes(tree2.root, splitId, newSizes) };
+function updateTreeSizes(tree, splitId, newSizes) {
+  if (!tree || !tree.root) return tree;
+  return { root: updateSplitSizes(tree.root, splitId, newSizes) };
 }
 function clamp01(v) {
   if (Number.isNaN(v)) return 0;
@@ -413,7 +413,7 @@ function getLayoutsSnapshot() {
   }
   return layoutsSnapshotCache;
 }
-function saveCustomLayout(name, tree2, panes) {
+function saveCustomLayout(name, tree, panes) {
   try {
     const list = getSavedLayouts().slice();
     const newLayout = {
@@ -422,7 +422,7 @@ function saveCustomLayout(name, tree2, panes) {
       createdAt: Date.now(),
       isCustom: true,
       panes: panes.map((p) => ({ sessionId: p.sessionId })),
-      tree: tree2
+      tree
     };
     list.unshift(newLayout);
     cachedCustomLayouts = list;
@@ -593,8 +593,8 @@ function accentFor(sessionId) {
   const idx = Math.abs(h) % ADE_PALETTE.length;
   return ADE_PALETTE[idx];
 }
-function setTree(tree2) {
-  const activeIds = getTreePaneIds(tree2 ? tree2.root : null);
+function setTree(tree) {
+  const activeIds = getTreePaneIds(tree ? tree.root : null);
   const existingMap = new Map(state.panes.map((p) => [p.sessionId, p]));
   const preserved = state.panes.filter((p) => activeIds.includes(p.sessionId));
   for (const id of activeIds) {
@@ -603,7 +603,7 @@ function setTree(tree2) {
     }
   }
   state = {
-    tree: tree2,
+    tree,
     panes: preserved
   };
   emit();
@@ -704,7 +704,7 @@ function disposeAlias() {
   }
   aliasDispose = null;
 }
-function activateSplitWithTree(tree2) {
+function activateSplitWithTree(tree) {
   const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
   splitStartMs = t0;
   refreshHandles();
@@ -712,7 +712,7 @@ function activateSplitWithTree(tree2) {
   ensureSidebarWrapped();
   ensureAliasRegistered();
   injectMotionStyles();
-  const ids = getTreePaneIds(tree2 ? tree2.root : null);
+  const ids = getTreePaneIds(tree ? tree.root : null);
   for (const id of ids) {
     try {
       ensureReference(id);
@@ -730,17 +730,17 @@ function activateSplitWithTree(tree2) {
     }
   } catch (_) {
   }
-  setTree(tree2);
+  setTree(tree);
 }
 function activateSplit(paneIds) {
-  let tree2 = null;
+  let tree = null;
   if (paneIds && paneIds.length > 0) {
-    tree2 = { root: { kind: "pane", id: paneIds[0] } };
+    tree = { root: { kind: "pane", id: paneIds[0] } };
     for (let i = 1; i < paneIds.length; i++) {
-      tree2 = insertOrSplit(tree2, paneIds[i], paneIds[i - 1], "right");
+      tree = insertOrSplit(tree, paneIds[i], paneIds[i - 1], "right");
     }
   }
-  activateSplitWithTree(tree2);
+  activateSplitWithTree(tree);
 }
 function deactivateSplit(remainingSessionId) {
   for (const id of [...retained.keys()]) releaseReference(id);
@@ -765,11 +765,11 @@ function ensureTree(rawTree, panes) {
     const same = treeIds.length === paneIds.length && treeIds.every((id, i) => id === paneIds[i]);
     if (same) return rawTree;
   }
-  let tree2 = { root: { kind: "pane", id: paneIds[0] } };
+  let tree = { root: { kind: "pane", id: paneIds[0] } };
   for (let i = 1; i < paneIds.length; i++) {
-    tree2 = insertOrSplit(tree2, paneIds[i], paneIds[i - 1], "right");
+    tree = insertOrSplit(tree, paneIds[i], paneIds[i - 1], "right");
   }
-  return tree2;
+  return tree;
 }
 var PaneErrorBoundary = class extends import_react.default.Component {
   constructor(props) {
@@ -1108,8 +1108,8 @@ function resolveSessionsForCount(count) {
   }
   return picked.slice(0, count);
 }
-function reconcileLayoutTree(tree2) {
-  if (!tree2 || !tree2.root) return null;
+function reconcileLayoutTree(tree) {
+  if (!tree || !tree.root) return null;
   const allKnownIds = (() => {
     try {
       if (!app || !app.sessions) return /* @__PURE__ */ new Set();
@@ -1143,7 +1143,7 @@ function reconcileLayoutTree(tree2) {
       children: (node.children || []).map(remapNode)
     };
   }
-  return { root: remapNode(tree2.root) };
+  return { root: remapNode(tree.root) };
 }
 function applyCustomLayout(layout) {
   if (!layout || !layout.tree) return;
@@ -1269,8 +1269,8 @@ function ADELayoutsSection(props) {
   const handleApplyPreset = (preset) => {
     const ids = resolveSessionsForCount(preset.panesCount);
     if (!ids || ids.length === 0) return;
-    const tree2 = preset.buildTree(ids);
-    activateSplitWithTree(tree2);
+    const tree = preset.buildTree(ids);
+    activateSplitWithTree(tree);
   };
   const handleApplyCustom = (layout) => {
     applyCustomLayout(layout);
@@ -1621,8 +1621,8 @@ function ADESplitRoot(props) {
   const snap = (0, import_react.useSyncExternalStore)(subscribe, getState);
   const panes = snap.panes;
   const rawTree = snap.tree;
-  const tree2 = import_react.default.useMemo(() => ensureTree(rawTree, panes), [rawTree, panes]);
-  const geometry = import_react.default.useMemo(() => computeTreeGeometry(tree2 ? tree2.root : null), [tree2]);
+  const tree = import_react.default.useMemo(() => ensureTree(rawTree, panes), [rawTree, panes]);
+  const geometry = import_react.default.useMemo(() => computeTreeGeometry(tree ? tree.root : null), [tree]);
   const [draggingDividerId, setDraggingDividerId] = import_react.default.useState(null);
   const containerRef = import_react.default.useRef(null);
   const totalPanes = panes.length;
@@ -1680,7 +1680,7 @@ function ADESplitRoot(props) {
       deactivateSplit(nextPanes[0].sessionId);
       return;
     }
-    const currentTree = tree2 || ensureTree(null, state.panes);
+    const currentTree = tree || ensureTree(null, state.panes);
     const nextTree = removePane(currentTree, sessionId);
     const remainingIds = getTreePaneIds(nextTree ? nextTree.root : null);
     if (remainingIds.length <= 1) {
@@ -1734,7 +1734,7 @@ function ADESplitRoot(props) {
     },
     panes.map((pane, idx) => {
       const rect = geometry.panes[pane.sessionId] || { left: 0, top: 0, width: 100, height: 100 };
-      const splitDirection = getImmediateSplitDirection(tree2 ? tree2.root : null, pane.sessionId) || "row";
+      const splitDirection = getImmediateSplitDirection(tree ? tree.root : null, pane.sessionId) || "row";
       return import_react.default.createElement(ADESplitPaneItem, {
         key: pane.sessionId,
         pane,
@@ -1873,8 +1873,18 @@ function ADESplitPaneItem(props) {
         top: `calc(${rect.top}% + 3px)`,
         width: `calc(${rect.width}% - 6px)`,
         height: `calc(${rect.height}% - 6px)`,
+        boxSizing: "border-box",
         display: "flex",
         flexDirection: "column",
+        minWidth: 0,
+        minHeight: 0,
+        borderRadius: "10px",
+        border: `1px solid ${accent.border}`,
+        borderTop: `2px solid ${accent.dot}`,
+        background: "rgba(10, 10, 14, 0.28)",
+        "--dsw-alias-bg-base": "transparent",
+        "--dsw-specific-sidebar-fill": "transparent",
+        boxShadow: `0 4px 16px rgba(0,0,0,0.22), 0 0 10px ${accent.glow.replace("0.45", "0.12")}`,
         pointerEvents: isDraggingDivider ? "none" : "auto",
         transition: isDraggingDivider ? "none" : "left 280ms cubic-bezier(0.22, 1, 0.36, 1), top 280ms cubic-bezier(0.22, 1, 0.36, 1), width 280ms cubic-bezier(0.22, 1, 0.36, 1), height 280ms cubic-bezier(0.22, 1, 0.36, 1)",
         willChange: "auto"
@@ -2113,7 +2123,8 @@ function apply(ctx) {
       } catch (_) {
       }
     }
-    const paneEl = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-ade-pane]") : null;
+    const fromPoint = typeof document.elementFromPoint === "function" ? document.elementFromPoint(e.clientX, e.clientY) : null;
+    const paneEl = fromPoint?.closest("[data-ade-pane]") || (e.target && typeof e.target.closest === "function" ? e.target.closest("[data-ade-pane]") : null);
     let targetSessionId = null;
     let rect = null;
     if (paneEl) {
@@ -2208,13 +2219,12 @@ function apply(ctx) {
       e.stopPropagation();
       dropHandled = true;
       if (!targetSessionId || targetSessionId === sourceId || !zone) return;
-      const currentTree = tree || ensureTree(state.tree, state.panes);
+      const currentTree = ensureTree(state.tree, state.panes);
       if (zone === "center") {
         const nextTree = swapTreePanes(currentTree, sourceId, targetSessionId);
         setTree(nextTree);
       } else {
-        const treeWithoutSource = removePane(currentTree, sourceId);
-        const nextTree = insertOrSplit(treeWithoutSource, sourceId, targetSessionId, zone);
+        const nextTree = insertOrSplit(currentTree, sourceId, targetSessionId, zone);
         setTree(nextTree);
       }
       return;
@@ -2227,7 +2237,8 @@ function apply(ctx) {
       e.stopPropagation();
       dropHandled = true;
       if (state.panes && state.panes.length > 0) {
-        const currentTree = tree || ensureTree(state.tree, state.panes);
+        if (state.panes.some((p) => p.sessionId === droppedId)) return;
+        const currentTree = ensureTree(state.tree, state.panes);
         const anchor = targetSessionId || state.panes[0]?.sessionId;
         const targetZone = zone === "center" || !zone ? "right" : zone;
         const nextTree = insertOrSplit(currentTree, droppedId, anchor, targetZone);

@@ -1621,8 +1621,18 @@ function ADESplitPaneItem(props) {
         top: `calc(${rect.top}% + 3px)`,
         width: `calc(${rect.width}% - 6px)`,
         height: `calc(${rect.height}% - 6px)`,
+        boxSizing: 'border-box',
         display: 'flex',
         flexDirection: 'column',
+        minWidth: 0,
+        minHeight: 0,
+        borderRadius: '10px',
+        border: `1px solid ${accent.border}`,
+        borderTop: `2px solid ${accent.dot}`,
+        background: 'rgba(10, 10, 14, 0.28)',
+        '--dsw-alias-bg-base': 'transparent',
+        '--dsw-specific-sidebar-fill': 'transparent',
+        boxShadow: `0 4px 16px rgba(0,0,0,0.22), 0 0 10px ${accent.glow.replace('0.45', '0.12')}`,
         pointerEvents: isDraggingDivider ? 'none' : 'auto',
         transition: isDraggingDivider
           ? 'none'
@@ -1874,9 +1884,12 @@ export function apply(ctx) {
       try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
     }
 
-    const paneEl = e.target && typeof e.target.closest === 'function'
-      ? e.target.closest('[data-ade-pane]')
+    const fromPoint = typeof document.elementFromPoint === 'function'
+      ? document.elementFromPoint(e.clientX, e.clientY)
       : null;
+    const paneEl = fromPoint?.closest('[data-ade-pane]') || (
+      e.target && typeof e.target.closest === 'function' ? e.target.closest('[data-ade-pane]') : null
+    );
     let targetSessionId = null;
     let rect = null;
 
@@ -1985,13 +1998,12 @@ export function apply(ctx) {
 
       if (!targetSessionId || targetSessionId === sourceId || !zone) return;
 
-      const currentTree = tree || ensureTree(state.tree, state.panes);
+      const currentTree = ensureTree(state.tree, state.panes);
       if (zone === 'center') {
         const nextTree = swapTreePanes(currentTree, sourceId, targetSessionId);
         setTree(nextTree);
       } else {
-        const treeWithoutSource = removePane(currentTree, sourceId);
-        const nextTree = insertOrSplit(treeWithoutSource, sourceId, targetSessionId, zone);
+        const nextTree = insertOrSplit(currentTree, sourceId, targetSessionId, zone);
         setTree(nextTree);
       }
       return;
@@ -2006,7 +2018,8 @@ export function apply(ctx) {
       dropHandled = true;
 
       if (state.panes && state.panes.length > 0) {
-        const currentTree = tree || ensureTree(state.tree, state.panes);
+        if (state.panes.some((p) => p.sessionId === droppedId)) return;
+        const currentTree = ensureTree(state.tree, state.panes);
         const anchor = targetSessionId || state.panes[0]?.sessionId;
         const targetZone = zone === 'center' || !zone ? 'right' : zone;
         const nextTree = insertOrSplit(currentTree, droppedId, anchor, targetZone);
