@@ -1033,6 +1033,77 @@ function injectMotionStyles() {
         opacity: 1;
         visibility: visible;
       }
+      [data-ade-preset-strip] {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+        padding: 1px 2px;
+      }
+      [data-ade-preset-btn] {
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        margin: 0;
+        border-radius: 7px;
+        color: var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.65));
+        background: var(--dsw-alias-interactive-bg-base, rgba(255, 255, 255, 0.05));
+        border: 1px solid transparent;
+        cursor: pointer;
+        transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+      }
+      [data-ade-preset-btn]:hover {
+        color: var(--dsw-alias-label-primary, #e2e8f0);
+        background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.1));
+      }
+      [data-ade-preset-btn][data-active="true"] {
+        color: #38bdf8;
+        background: rgba(56, 189, 248, 0.14);
+        border-color: rgba(56, 189, 248, 0.35);
+      }
+      [data-ade-save-form] {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 2px 2px 6px 2px;
+      }
+      [data-ade-save-input] {
+        flex: 1;
+        min-width: 0;
+        height: 26px;
+        padding: 0 8px;
+        border-radius: 6px;
+        border: 1px solid var(--dsw-alias-border-base, rgba(255, 255, 255, 0.12));
+        background: var(--dsw-alias-bg-canvas, rgba(0, 0, 0, 0.25));
+        color: var(--dsw-alias-label-primary, #e2e8f0);
+        font: inherit;
+        font-size: 12px;
+        outline: none;
+      }
+      [data-ade-save-input]:focus {
+        border-color: rgba(56, 189, 248, 0.6);
+      }
+      [data-ade-save-confirm],
+      [data-ade-save-cancel] {
+        height: 26px;
+        padding: 0 8px;
+        border-radius: 6px;
+        border: 1px solid transparent;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      [data-ade-save-confirm] {
+        color: #38bdf8;
+        background: rgba(56, 189, 248, 0.14);
+        border-color: rgba(56, 189, 248, 0.3);
+      }
+      [data-ade-save-cancel] {
+        color: var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.65));
+        background: transparent;
+      }
       @media (prefers-reduced-motion: reduce) {
         [data-ade-split] [data-ade-pane],
         [data-ade-split] > [data-ade-divider]::before,
@@ -1309,19 +1380,45 @@ function isCustomActive(layout, snap) {
 }
 function ADELayoutsSection(props) {
   const [collapsed, setCollapsed] = import_react.default.useState(false);
+  const [isNaming, setIsNaming] = import_react.default.useState(false);
+  const [nameInput, setNameInput] = import_react.default.useState("");
+  const inputRef = import_react.default.useRef(null);
   const snap = (0, import_react.useSyncExternalStore)(subscribe, getState);
   const layoutSnap = (0, import_react.useSyncExternalStore)(subscribeLayouts, getLayoutsSnapshot);
   const { customLayouts } = layoutSnap;
   const presets = getPresetLayouts();
-  const hasActiveSplit = snap.panes && snap.panes.length >= 2;
-  const handleSaveCurrent = (e) => {
-    e.stopPropagation();
-    if (!hasActiveSplit) return;
-    const defaultName = `Split (${snap.panes.length} panes)`;
-    const name = typeof window !== "undefined" && window.prompt ? window.prompt("Layout name:", defaultName) : defaultName;
-    if (name && name.trim()) {
-      saveCustomLayout(name.trim(), snap.tree, snap.panes);
+  const panes = snap.panes || [];
+  const canSave = panes.length >= 1;
+  import_react.default.useEffect(() => {
+    if (isNaming && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
     }
+  }, [isNaming]);
+  const handleStartSave = (e) => {
+    e.stopPropagation();
+    if (!canSave) return;
+    const defaultName = panes.length >= 2 ? `Split (${panes.length} panes)` : "Layout";
+    setNameInput(defaultName);
+    setIsNaming(true);
+    if (collapsed) setCollapsed(false);
+  };
+  const handleConfirmSave = (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    const treeToSave = ensureTree(snap.tree, panes);
+    if (!treeToSave) return;
+    const trimmed = (nameInput || "").trim() || (panes.length >= 2 ? `Split (${panes.length} panes)` : "Layout");
+    saveCustomLayout(trimmed, treeToSave, panes);
+    setIsNaming(false);
+    setNameInput("");
+  };
+  const handleCancelSave = (e) => {
+    if (e) e.stopPropagation();
+    setIsNaming(false);
+    setNameInput("");
   };
   const handleApplyPreset = (preset) => {
     const ids = resolveSessionsForCount(preset.panesCount);
@@ -1382,17 +1479,17 @@ function ADELayoutsSection(props) {
               color: "var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.5))"
             }
           },
-          String(presets.length + customLayouts.length)
+          String(customLayouts.length)
         )
       ),
-      hasActiveSplit ? import_react.default.createElement(
+      canSave ? import_react.default.createElement(
         "button",
         {
           type: "button",
-          title: "Save current split as a named layout",
-          onClick: handleSaveCurrent,
+          title: isNaming ? "Cancel naming" : "Save current split as a named layout",
+          onClick: isNaming ? handleCancelSave : handleStartSave,
           style: {
-            background: "transparent",
+            background: isNaming ? "rgba(255, 255, 255, 0.1)" : "transparent",
             border: "none",
             color: "var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.65))",
             cursor: "pointer",
@@ -1404,59 +1501,71 @@ function ADELayoutsSection(props) {
             gap: 3
           }
         },
-        import_react.default.createElement("span", { style: { fontSize: 13, lineHeight: 1, fontWeight: 700 } }, "+"),
-        import_react.default.createElement("span", null, "Save")
+        import_react.default.createElement("span", { style: { fontSize: 13, lineHeight: 1, fontWeight: 700 } }, isNaming ? "\u2715" : "+"),
+        import_react.default.createElement("span", null, isNaming ? "Cancel" : "Save")
       ) : null
     ),
     !collapsed ? import_react.default.createElement(
       "div",
-      { style: { display: "flex", flexDirection: "column", gap: 2, marginTop: 4 } },
-      presets.map((preset) => {
-        const isActive = isPresetActive(preset, snap);
-        return import_react.default.createElement(
-          "div",
+      { style: { display: "flex", flexDirection: "column", gap: 3, marginTop: 4 } },
+      isNaming ? import_react.default.createElement(
+        "form",
+        {
+          "data-ade-save-form": "",
+          onSubmit: handleConfirmSave,
+          onClick: (e) => e.stopPropagation()
+        },
+        import_react.default.createElement("input", {
+          ref: inputRef,
+          "data-ade-save-input": "",
+          type: "text",
+          value: nameInput,
+          placeholder: "Layout name...",
+          onChange: (e) => setNameInput(e.target.value),
+          onKeyDown: (e) => {
+            if (e.key === "Escape") handleCancelSave(e);
+          }
+        }),
+        import_react.default.createElement(
+          "button",
           {
-            key: preset.id,
-            "data-ade-layout-row": "",
-            "data-active": isActive ? "true" : void 0,
-            onClick: () => handleApplyPreset(preset),
-            title: `${preset.name} (${preset.subtitle})`
+            type: "submit",
+            "data-ade-save-confirm": "",
+            title: "Save layout"
           },
-          import_react.default.createElement(
-            "div",
-            { style: { display: "flex", alignItems: "center", gap: 7, minWidth: 0, overflow: "hidden" } },
-            renderLayoutIcon(preset.icon),
-            import_react.default.createElement(
-              "span",
-              {
-                style: {
-                  fontSize: 12,
-                  fontWeight: isActive ? 600 : 400,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis"
-                }
-              },
-              preset.name
-            )
-          ),
-          import_react.default.createElement(
-            "span",
+          "Save"
+        ),
+        import_react.default.createElement(
+          "button",
+          {
+            type: "button",
+            "data-ade-save-cancel": "",
+            title: "Cancel",
+            onClick: handleCancelSave
+          },
+          "\u2715"
+        )
+      ) : null,
+      import_react.default.createElement(
+        "div",
+        { "data-ade-preset-strip": "", title: "Quick split presets" },
+        presets.map((preset) => {
+          const isActive = isPresetActive(preset, snap);
+          return import_react.default.createElement(
+            "button",
             {
-              style: {
-                fontSize: 10,
-                fontWeight: 600,
-                color: isActive ? "#38bdf8" : "var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.4))",
-                padding: "1px 4px",
-                borderRadius: 3,
-                background: isActive ? "rgba(56, 189, 248, 0.15)" : "rgba(255, 255, 255, 0.05)"
-              }
+              key: preset.id,
+              type: "button",
+              "data-ade-preset-btn": "",
+              "data-active": isActive ? "true" : void 0,
+              onClick: () => handleApplyPreset(preset),
+              title: `${preset.name} (${preset.subtitle})`
             },
-            `${preset.panesCount}P`
-          )
-        );
-      }),
-      customLayouts.map((layout) => {
+            renderLayoutIcon(preset.icon)
+          );
+        })
+      ),
+      customLayouts.length > 0 ? customLayouts.map((layout) => {
         const isActive = isCustomActive(layout, snap);
         const paneCount = layout.panes && layout.panes.length || 0;
         return import_react.default.createElement(
@@ -1525,7 +1634,18 @@ function ADELayoutsSection(props) {
             )
           )
         );
-      })
+      }) : import_react.default.createElement(
+        "div",
+        {
+          style: {
+            padding: "6px 8px",
+            fontSize: 11,
+            color: "var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.4))",
+            fontStyle: "italic"
+          }
+        },
+        "No saved layouts yet. Click + Save to save current split."
+      )
     ) : null
   );
 }

@@ -724,6 +724,77 @@ function injectMotionStyles() {
         opacity: 1;
         visibility: visible;
       }
+      [data-ade-preset-strip] {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+        padding: 1px 2px;
+      }
+      [data-ade-preset-btn] {
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        margin: 0;
+        border-radius: 7px;
+        color: var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.65));
+        background: var(--dsw-alias-interactive-bg-base, rgba(255, 255, 255, 0.05));
+        border: 1px solid transparent;
+        cursor: pointer;
+        transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+      }
+      [data-ade-preset-btn]:hover {
+        color: var(--dsw-alias-label-primary, #e2e8f0);
+        background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.1));
+      }
+      [data-ade-preset-btn][data-active="true"] {
+        color: #38bdf8;
+        background: rgba(56, 189, 248, 0.14);
+        border-color: rgba(56, 189, 248, 0.35);
+      }
+      [data-ade-save-form] {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 2px 2px 6px 2px;
+      }
+      [data-ade-save-input] {
+        flex: 1;
+        min-width: 0;
+        height: 26px;
+        padding: 0 8px;
+        border-radius: 6px;
+        border: 1px solid var(--dsw-alias-border-base, rgba(255, 255, 255, 0.12));
+        background: var(--dsw-alias-bg-canvas, rgba(0, 0, 0, 0.25));
+        color: var(--dsw-alias-label-primary, #e2e8f0);
+        font: inherit;
+        font-size: 12px;
+        outline: none;
+      }
+      [data-ade-save-input]:focus {
+        border-color: rgba(56, 189, 248, 0.6);
+      }
+      [data-ade-save-confirm],
+      [data-ade-save-cancel] {
+        height: 26px;
+        padding: 0 8px;
+        border-radius: 6px;
+        border: 1px solid transparent;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      [data-ade-save-confirm] {
+        color: #38bdf8;
+        background: rgba(56, 189, 248, 0.14);
+        border-color: rgba(56, 189, 248, 0.3);
+      }
+      [data-ade-save-cancel] {
+        color: var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.65));
+        background: transparent;
+      }
       @media (prefers-reduced-motion: reduce) {
         [data-ade-split] [data-ade-pane],
         [data-ade-split] > [data-ade-divider]::before,
@@ -1012,22 +1083,50 @@ function isCustomActive(layout, snap) {
 
 function ADELayoutsSection(props) {
   const [collapsed, setCollapsed] = React.useState(false);
+  const [isNaming, setIsNaming] = React.useState(false);
+  const [nameInput, setNameInput] = React.useState('');
+  const inputRef = React.useRef(null);
+
   const snap = useSyncExternalStore(subscribe, getState);
   const layoutSnap = useSyncExternalStore(subscribeLayouts, getLayoutsSnapshot);
   const { customLayouts } = layoutSnap;
   const presets = getPresetLayouts();
-  const hasActiveSplit = snap.panes && snap.panes.length >= 2;
+  const panes = snap.panes || [];
+  const canSave = panes.length >= 1;
 
-  const handleSaveCurrent = (e) => {
-    e.stopPropagation();
-    if (!hasActiveSplit) return;
-    const defaultName = `Split (${snap.panes.length} panes)`;
-    const name = typeof window !== 'undefined' && window.prompt
-      ? window.prompt('Layout name:', defaultName)
-      : defaultName;
-    if (name && name.trim()) {
-      saveCustomLayout(name.trim(), snap.tree, snap.panes);
+  React.useEffect(() => {
+    if (isNaming && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
     }
+  }, [isNaming]);
+
+  const handleStartSave = (e) => {
+    e.stopPropagation();
+    if (!canSave) return;
+    const defaultName = panes.length >= 2 ? `Split (${panes.length} panes)` : 'Layout';
+    setNameInput(defaultName);
+    setIsNaming(true);
+    if (collapsed) setCollapsed(false);
+  };
+
+  const handleConfirmSave = (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    const treeToSave = ensureTree(snap.tree, panes);
+    if (!treeToSave) return;
+    const trimmed = (nameInput || '').trim() || (panes.length >= 2 ? `Split (${panes.length} panes)` : 'Layout');
+    saveCustomLayout(trimmed, treeToSave, panes);
+    setIsNaming(false);
+    setNameInput('');
+  };
+
+  const handleCancelSave = (e) => {
+    if (e) e.stopPropagation();
+    setIsNaming(false);
+    setNameInput('');
   };
 
   const handleApplyPreset = (preset) => {
@@ -1092,18 +1191,18 @@ function ADELayoutsSection(props) {
               color: 'var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.5))',
             },
           },
-          String(presets.length + customLayouts.length)
+          String(customLayouts.length)
         )
       ),
-      hasActiveSplit
+      canSave
         ? React.createElement(
             'button',
             {
               type: 'button',
-              title: 'Save current split as a named layout',
-              onClick: handleSaveCurrent,
+              title: isNaming ? 'Cancel naming' : 'Save current split as a named layout',
+              onClick: isNaming ? handleCancelSave : handleStartSave,
               style: {
-                background: 'transparent',
+                background: isNaming ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
                 border: 'none',
                 color: 'var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.65))',
                 cursor: 'pointer',
@@ -1115,130 +1214,157 @@ function ADELayoutsSection(props) {
                 gap: 3,
               },
             },
-            React.createElement('span', { style: { fontSize: 13, lineHeight: 1, fontWeight: 700 } }, '+'),
-            React.createElement('span', null, 'Save')
+            React.createElement('span', { style: { fontSize: 13, lineHeight: 1, fontWeight: 700 } }, isNaming ? '✕' : '+'),
+            React.createElement('span', null, isNaming ? 'Cancel' : 'Save')
           )
         : null
     ),
     !collapsed
       ? React.createElement(
           'div',
-          { style: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 4 } },
-          presets.map((preset) => {
-            const isActive = isPresetActive(preset, snap);
-            return React.createElement(
-              'div',
-              {
-                key: preset.id,
-                'data-ade-layout-row': '',
-                'data-active': isActive ? 'true' : void 0,
-                onClick: () => handleApplyPreset(preset),
-                title: `${preset.name} (${preset.subtitle})`,
-              },
-              React.createElement(
-                'div',
-                { style: { display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, overflow: 'hidden' } },
-                renderLayoutIcon(preset.icon),
-                React.createElement(
-                  'span',
-                  {
-                    style: {
-                      fontSize: 12,
-                      fontWeight: isActive ? 600 : 400,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    },
-                  },
-                  preset.name
-                )
-              ),
-              React.createElement(
-                'span',
+          { style: { display: 'flex', flexDirection: 'column', gap: 3, marginTop: 4 } },
+          isNaming
+            ? React.createElement(
+                'form',
                 {
-                  style: {
-                    fontSize: 10,
-                    fontWeight: 600,
-                    color: isActive ? '#38bdf8' : 'var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.4))',
-                    padding: '1px 4px',
-                    borderRadius: 3,
-                    background: isActive ? 'rgba(56, 189, 248, 0.15)' : 'rgba(255, 255, 255, 0.05)',
-                  },
+                  'data-ade-save-form': '',
+                  onSubmit: handleConfirmSave,
+                  onClick: (e) => e.stopPropagation(),
                 },
-                `${preset.panesCount}P`
-              )
-            );
-          }),
-          customLayouts.map((layout) => {
-            const isActive = isCustomActive(layout, snap);
-            const paneCount = (layout.panes && layout.panes.length) || 0;
-            return React.createElement(
-              'div',
-              {
-                key: layout.id,
-                'data-ade-layout-row': '',
-                'data-active': isActive ? 'true' : void 0,
-                onClick: () => handleApplyCustom(layout),
-                title: `${layout.name} (Saved layout with ${paneCount} panes)`,
-              },
-              React.createElement(
-                'div',
-                { style: { display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, overflow: 'hidden' } },
-                renderLayoutIcon('custom'),
-                React.createElement(
-                  'span',
-                  {
-                    style: {
-                      fontSize: 12,
-                      fontWeight: isActive ? 600 : 400,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    },
+                React.createElement('input', {
+                  ref: inputRef,
+                  'data-ade-save-input': '',
+                  type: 'text',
+                  value: nameInput,
+                  placeholder: 'Layout name...',
+                  onChange: (e) => setNameInput(e.target.value),
+                  onKeyDown: (e) => {
+                    if (e.key === 'Escape') handleCancelSave(e);
                   },
-                  layout.name
-                )
-              ),
-              React.createElement(
-                'div',
-                { style: { display: 'flex', alignItems: 'center', gap: 6, flex: '0 0 auto' } },
+                }),
                 React.createElement(
-                  'span',
+                  'button',
                   {
-                    style: {
-                      fontSize: 10,
-                      fontWeight: 600,
-                      color: isActive ? '#38bdf8' : 'var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.4))',
-                      padding: '1px 4px',
-                      borderRadius: 3,
-                      background: isActive ? 'rgba(56, 189, 248, 0.15)' : 'rgba(255, 255, 255, 0.05)',
-                    },
+                    type: 'submit',
+                    'data-ade-save-confirm': '',
+                    title: 'Save layout',
                   },
-                  `${paneCount}P`
+                  'Save'
                 ),
                 React.createElement(
                   'button',
                   {
                     type: 'button',
-                    className: 'ade-delete-btn',
-                    title: 'Delete this saved layout',
-                    onClick: (e) => handleDeleteCustom(e, layout.id),
-                    style: {
-                      background: 'transparent',
-                      border: 'none',
-                      color: 'var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.4))',
-                      cursor: 'pointer',
-                      padding: '2px 4px',
-                      borderRadius: 3,
-                      fontSize: 11,
-                      lineHeight: 1,
-                    },
+                    'data-ade-save-cancel': '',
+                    title: 'Cancel',
+                    onClick: handleCancelSave,
                   },
                   '✕'
                 )
               )
-            );
-          })
+            : null,
+          React.createElement(
+            'div',
+            { 'data-ade-preset-strip': '', title: 'Quick split presets' },
+            presets.map((preset) => {
+              const isActive = isPresetActive(preset, snap);
+              return React.createElement(
+                'button',
+                {
+                  key: preset.id,
+                  type: 'button',
+                  'data-ade-preset-btn': '',
+                  'data-active': isActive ? 'true' : void 0,
+                  onClick: () => handleApplyPreset(preset),
+                  title: `${preset.name} (${preset.subtitle})`,
+                },
+                renderLayoutIcon(preset.icon)
+              );
+            })
+          ),
+          customLayouts.length > 0
+            ? customLayouts.map((layout) => {
+                const isActive = isCustomActive(layout, snap);
+                const paneCount = (layout.panes && layout.panes.length) || 0;
+                return React.createElement(
+                  'div',
+                  {
+                    key: layout.id,
+                    'data-ade-layout-row': '',
+                    'data-active': isActive ? 'true' : void 0,
+                    onClick: () => handleApplyCustom(layout),
+                    title: `${layout.name} (Saved layout with ${paneCount} panes)`,
+                  },
+                  React.createElement(
+                    'div',
+                    { style: { display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, overflow: 'hidden' } },
+                    renderLayoutIcon('custom'),
+                    React.createElement(
+                      'span',
+                      {
+                        style: {
+                          fontSize: 12,
+                          fontWeight: isActive ? 600 : 400,
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        },
+                      },
+                      layout.name
+                    )
+                  ),
+                  React.createElement(
+                    'div',
+                    { style: { display: 'flex', alignItems: 'center', gap: 6, flex: '0 0 auto' } },
+                    React.createElement(
+                      'span',
+                      {
+                        style: {
+                          fontSize: 10,
+                          fontWeight: 600,
+                          color: isActive ? '#38bdf8' : 'var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.4))',
+                          padding: '1px 4px',
+                          borderRadius: 3,
+                          background: isActive ? 'rgba(56, 189, 248, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+                        },
+                      },
+                      `${paneCount}P`
+                    ),
+                    React.createElement(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'ade-delete-btn',
+                        title: 'Delete this saved layout',
+                        onClick: (e) => handleDeleteCustom(e, layout.id),
+                        style: {
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.4))',
+                          cursor: 'pointer',
+                          padding: '2px 4px',
+                          borderRadius: 3,
+                          fontSize: 11,
+                          lineHeight: 1,
+                        },
+                      },
+                      '✕'
+                    )
+                  )
+                );
+              })
+            : React.createElement(
+                'div',
+                {
+                  style: {
+                    padding: '6px 8px',
+                    fontSize: 11,
+                    color: 'var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.4))',
+                    fontStyle: 'italic',
+                  },
+                },
+                'No saved layouts yet. Click + Save to save current split.'
+              )
         )
       : null
   );
