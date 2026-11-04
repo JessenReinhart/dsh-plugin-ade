@@ -54,9 +54,16 @@ async function build() {
   const wrapped = `window.__ModuleLoader__.load({
   id: "@community/dsh-plugin-ade",
   factory: (require) => {
+    if (typeof window !== 'undefined' && window.__ADE_CLIENT_LOADED__) {
+      return window.__ADE_CLIENT_EXPORTS__;
+    }
     var module = { exports: {} };
     var exports = module.exports;
     ${rawCode}
+    if (typeof window !== 'undefined') {
+      window.__ADE_CLIENT_LOADED__ = true;
+      window.__ADE_CLIENT_EXPORTS__ = module.exports;
+    }
     return module.exports;
   }
 });

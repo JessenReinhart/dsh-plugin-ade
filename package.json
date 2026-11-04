@@ -1,6 +1,6 @@
 {
   "name": "@community/dsh-plugin-ade",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "description": "Hyprland-style drag-to-split multi-pane conversation layout for DeepSeek Harness Desktop.",
   "license": "MIT",
   "repository": {

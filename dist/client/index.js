@@ -1,6 +1,9 @@
 window.__ModuleLoader__.load({
   id: "@community/dsh-plugin-ade",
   factory: (require) => {
+    if (typeof window !== 'undefined' && window.__ADE_CLIENT_LOADED__) {
+      return window.__ADE_CLIENT_EXPORTS__;
+    }
     var module = { exports: {} };
     var exports = module.exports;
     "use strict";
@@ -2027,6 +2030,16 @@ function readSessionsSnapshot() {
     return null;
   }
 }
+var sessionsSnapshotCache = null;
+function getCachedSessionsSnapshot() {
+  if (sessionsSnapshotCache === null) {
+    sessionsSnapshotCache = readSessionsSnapshot() || {};
+  }
+  return sessionsSnapshotCache;
+}
+function invalidateSessionsSnapshotCache() {
+  sessionsSnapshotCache = null;
+}
 function childEntriesForParent(snapshot, parentId) {
   if (!snapshot || !parentId) return [];
   const byId = snapshot.byId || {};
@@ -2421,51 +2434,58 @@ function openSubagentStack(parentId) {
   const targetId = parentPane ? parentPane.sessionId : state.panes[0].sessionId;
   setTree(insertOrSplit(state.tree, firstChild.id, targetId, "right"));
 }
+var isReconcilingSubagents = false;
 function reconcileSubagentAutoSplit() {
-  if (!getSubagentAutosplitSetting()) {
+  if (isReconcilingSubagents) return;
+  isReconcilingSubagents = true;
+  try {
+    if (!getSubagentAutosplitSetting()) {
+      refreshSubagentStacks();
+      return;
+    }
+    const snapshot = readSessionsSnapshot();
+    if (!snapshot) return;
+    const currentPanes = (state.panes || []).slice();
+    const panesSet = new Set(currentPanes.map((p) => p.sessionId));
+    let visibleParents = [];
+    if (currentPanes.length === 0) {
+      const mainId = currentMainSessionId();
+      if (mainId) visibleParents = [mainId];
+    } else {
+      visibleParents = currentPanes.map((p) => subagentParentOf(snapshot, p.sessionId) || p.sessionId).filter((id) => id);
+      for (const p of currentPanes) {
+        if (!subagentParentOf(snapshot, p.sessionId)) visibleParents.push(p.sessionId);
+      }
+      visibleParents = [...new Set(visibleParents)];
+    }
+    const firstId = currentPanes[0] ? currentPanes[0].sessionId : currentMainSessionId();
+    for (const parentId of visibleParents) {
+      const children = childEntriesForParent(snapshot, parentId);
+      if (!children.length) continue;
+      const runningChild = children.find((c) => c.running);
+      const target = runningChild || children.find((c) => !panesSet.has(c.id)) || children[0];
+      const wantsAutoSwitch = runningChild;
+      const currentlyShownChild = currentPanes.find((p) => subagentParentOf(snapshot, p.sessionId) === parentId && p.sessionId !== parentId);
+      if (currentlyShownChild) {
+        const pinnedValue = PINNED_STACK_BY_PARENT.get(parentId);
+        if (wantsAutoSwitch && pinnedValue !== currentlyShownChild.sessionId) {
+          swapSubagentInPane(currentlyShownChild.sessionId, target.id);
+        }
+      } else if (target && !panesSet.has(target.id)) {
+        if (currentPanes.length === 0 && firstId) {
+          ensureTree({ root: { kind: "pane", id: firstId } }, [{ sessionId: firstId }]);
+        }
+        const anchor = panesSet.has(parentId) ? parentId : firstId || parentId;
+        if (anchor && panesSet.has(anchor)) {
+          ensureReference(target.id);
+          setTree(insertOrSplit(state.tree || ensureTree(null, currentPanes), target.id, anchor, "right"));
+        }
+      }
+    }
     refreshSubagentStacks();
-    return;
+  } finally {
+    isReconcilingSubagents = false;
   }
-  const snapshot = readSessionsSnapshot();
-  if (!snapshot) return;
-  const currentPanes = (state.panes || []).slice();
-  const panesSet = new Set(currentPanes.map((p) => p.sessionId));
-  let visibleParents = [];
-  if (currentPanes.length === 0) {
-    const mainId = currentMainSessionId();
-    if (mainId) visibleParents = [mainId];
-  } else {
-    visibleParents = currentPanes.map((p) => subagentParentOf(snapshot, p.sessionId) || p.sessionId).filter((id) => id);
-    for (const p of currentPanes) {
-      if (!subagentParentOf(snapshot, p.sessionId)) visibleParents.push(p.sessionId);
-    }
-    visibleParents = [...new Set(visibleParents)];
-  }
-  const firstId = currentPanes[0] ? currentPanes[0].sessionId : currentMainSessionId();
-  for (const parentId of visibleParents) {
-    const children = childEntriesForParent(snapshot, parentId);
-    if (!children.length) continue;
-    const runningChild = children.find((c) => c.running);
-    const target = runningChild || children.find((c) => !panesSet.has(c.id)) || children[0];
-    const wantsAutoSwitch = runningChild;
-    const currentlyShownChild = currentPanes.find((p) => subagentParentOf(snapshot, p.sessionId) === parentId && p.sessionId !== parentId);
-    if (currentlyShownChild) {
-      const pinnedValue = PINNED_STACK_BY_PARENT.get(parentId);
-      if (wantsAutoSwitch && pinnedValue !== currentlyShownChild.sessionId) {
-        swapSubagentInPane(currentlyShownChild.sessionId, target.id);
-      }
-    } else if (target && !panesSet.has(target.id)) {
-      if (currentPanes.length === 0 && firstId) {
-        ensureTree({ root: { kind: "pane", id: firstId } }, [{ sessionId: firstId }]);
-      }
-      const anchor = panesSet.has(parentId) ? parentId : firstId || parentId;
-      if (anchor && panesSet.has(anchor)) {
-        ensureReference(target.id);
-        setTree(insertOrSplit(state.tree || ensureTree(null, currentPanes), target.id, anchor, "right"));
-      }
-    }
-  }
-  refreshSubagentStacks();
 }
 var originalConversationPanel = null;
 var wrappedConversationEntry = null;
@@ -2479,10 +2499,12 @@ function ensureConversationWrapped() {
     const entries = app.slots.entries("main") || [];
     const conv = entries.find((entry) => entry && entry.options && entry.options.key === "conversation");
     if (!conv) return false;
-    if (conv.component === ADESplitRoot) return true;
+    if (conv.component === ADESplitRoot || conv.component?.__isADESplitRoot) return true;
     if (typeof conv.component !== "function") return false;
-    if (originalConversationPanel === null) originalConversationPanel = conv.component;
+    if (!conv.__adeOriginalComponent) conv.__adeOriginalComponent = conv.component;
+    originalConversationPanel = conv.__adeOriginalComponent;
     if (wrappedConversationEntry !== conv) wrappedConversationEntry = conv;
+    ADESplitRoot.__isADESplitRoot = true;
     conv.component = ADESplitRoot;
     return true;
   } catch (err) {
@@ -2508,9 +2530,11 @@ function ensureSidebarWrapped() {
     const entries = app.slots.entries("sidebar.workspaces") || [];
     const entry = entries.find((e) => e && typeof e.component === "function");
     if (!entry) return false;
-    if (entry.component === ADESidebarWrapper) return true;
-    if (originalSidebarWorkspaces === null) originalSidebarWorkspaces = entry.component;
+    if (entry.component === ADESidebarWrapper || entry.component?.__isADESidebarWrapper) return true;
+    if (!entry.__adeOriginalComponent) entry.__adeOriginalComponent = entry.component;
+    originalSidebarWorkspaces = entry.__adeOriginalComponent;
     if (wrappedSidebarEntry !== entry) wrappedSidebarEntry = entry;
+    ADESidebarWrapper.__isADESidebarWrapper = true;
     entry.component = ADESidebarWrapper;
     return true;
   } catch (_) {
@@ -2586,7 +2610,7 @@ function disposeSubagentRowAction() {
 }
 function ADENodeGraphViewWrapper(props) {
   const sessionId = props && props.sessionId ? props.sessionId : currentMainSessionId();
-  const sessionsSnapshot = (0, import_react2.useSyncExternalStore)(subscribeSubagent, () => readSessionsSnapshot());
+  const sessionsSnapshot = (0, import_react2.useSyncExternalStore)(subscribeSubagent, getCachedSessionsSnapshot);
   const layoutPanesSnapshot = (0, import_react2.useSyncExternalStore)(subscribe, getState);
   const layoutInfoSnapshot = (0, import_react2.useSyncExternalStore)(subscribeLayoutInfo, getActiveLayoutInfo);
   const savedLayoutsSnapshot = (0, import_react2.useSyncExternalStore)(subscribeLayouts, getLayoutsSnapshot);
@@ -3578,20 +3602,32 @@ function applyCustomLayout(layout) {
     });
   }
 }
+var hasRestoredPersistedSplit = false;
 function restorePersistedSplit() {
+  if (hasRestoredPersistedSplit) return;
   try {
     if (typeof localStorage === "undefined") return;
     const raw = localStorage.getItem(ACTIVE_STATE_KEY);
     if (!raw) return;
     const parsed = JSON.parse(raw);
     if (!parsed || !parsed.tree || !parsed.panes || parsed.panes.length === 0) return;
+    let unsub = null;
     const checkAndRestore = () => {
+      if (hasRestoredPersistedSplit) return true;
       try {
         if (!app || !app.sessions) return false;
         const snap = app.sessions.list.getSnapshot();
         const byId = snap.byId || {};
         const availableIds = new Set(Object.keys(byId));
         if (availableIds.size === 0) return false;
+        hasRestoredPersistedSplit = true;
+        if (typeof unsub === "function") {
+          try {
+            unsub();
+          } catch (_) {
+          }
+          unsub = null;
+        }
         const paneIds = getTreePaneIds(parsed.tree.root);
         const validIds = paneIds.filter((id) => availableIds.has(id));
         if (validIds.length === 0) return true;
@@ -3604,14 +3640,8 @@ function restorePersistedSplit() {
     };
     if (!checkAndRestore()) {
       if (app && app.sessions && app.sessions.list && app.sessions.list.subscribe) {
-        let unsub = null;
         unsub = app.sessions.list.subscribe(() => {
-          if (checkAndRestore() && typeof unsub === "function") {
-            try {
-              unsub();
-            } catch (_) {
-            }
-          }
+          checkAndRestore();
         });
       }
     }
@@ -4536,19 +4566,21 @@ function ADESubagentChildList(props) {
 function ADESubagentRowExpander(props) {
   const sessionId = props.sessionId || props.node && props.node.id;
   if (!sessionId) return null;
-  const sessionSnap = (0, import_react2.useSyncExternalStore)(subscribeSubagent, () => readSessionsSnapshot());
+  const sessionSnap = (0, import_react2.useSyncExternalStore)(subscribeSubagent, getCachedSessionsSnapshot);
   const isExpanded = (0, import_react2.useSyncExternalStore)(subscribeExpanded, () => expandedSessionIds.has(sessionId));
   const children = import_react2.default.useMemo(() => {
     return childEntriesForParent(sessionSnap, sessionId);
   }, [sessionSnap, sessionId]);
   const [hostEl, setHostEl] = import_react2.default.useState(null);
+  const hostRef = import_react2.default.useRef(null);
   import_react2.default.useEffect(() => {
     if (!isExpanded || children.length === 0) {
-      if (hostEl && hostEl.parentNode) {
+      if (hostRef.current) {
         try {
-          hostEl.parentNode.removeChild(hostEl);
+          hostRef.current.remove();
         } catch (_) {
         }
+        hostRef.current = null;
       }
       setHostEl(null);
       return;
@@ -4556,29 +4588,31 @@ function ADESubagentRowExpander(props) {
     const syncHost = () => {
       const parentRow = document.querySelector(`[data-row-key="session:${sessionId}"]`);
       if (!parentRow || !parentRow.parentNode) return;
-      let host = hostEl;
-      if (!host || !host.parentNode || host.previousElementSibling !== parentRow) {
-        if (!host) {
-          host = document.createElement("div");
-          host.setAttribute("data-ade-subagent-host", sessionId);
-          host.style.width = "100%";
-        }
-        parentRow.parentNode.insertBefore(host, parentRow.nextSibling);
+      let host = hostRef.current;
+      if (!host) {
+        host = document.createElement("div");
+        host.setAttribute("data-ade-subagent-host", sessionId);
+        host.style.width = "100%";
+        hostRef.current = host;
         setHostEl(host);
+      }
+      if (host.parentNode !== parentRow.parentNode || host.previousElementSibling !== parentRow) {
+        parentRow.parentNode.insertBefore(host, parentRow.nextSibling);
       }
     };
     syncHost();
     const interval = setInterval(syncHost, 1e3);
     return () => {
       clearInterval(interval);
-      if (hostEl && hostEl.parentNode) {
+      if (hostRef.current) {
         try {
-          hostEl.parentNode.removeChild(hostEl);
+          hostRef.current.remove();
         } catch (_) {
         }
+        hostRef.current = null;
       }
     };
-  }, [isExpanded, sessionId, children.length, hostEl]);
+  }, [isExpanded, sessionId, children.length]);
   if (children.length === 0) return null;
   const hasRunning = children.some((c) => c.running);
   const portalFn = getPortalFn();
@@ -5478,6 +5512,7 @@ function apply(ctx) {
   if (app && app.sessions && app.sessions.list && app.sessions.list.subscribe) {
     subagentUnsub = app.sessions.list.subscribe(() => {
       try {
+        invalidateSessionsSnapshotCache();
         emitSubagentSnapshot();
         reconcileSubagentAutoSplit();
       } catch (err) {
@@ -5794,6 +5829,10 @@ var inject = [
   "workspaces"
 ];
 
+    if (typeof window !== 'undefined') {
+      window.__ADE_CLIENT_LOADED__ = true;
+      window.__ADE_CLIENT_EXPORTS__ = module.exports;
+    }
     return module.exports;
   }
 });
