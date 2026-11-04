@@ -3,3 +3,15 @@ node_modules/
 Thumbs.db
 *.log
 dist/*.map
+
+# One-off host debugging helpers; reproducible via HANDOVER.md
+scripts/all-procs.cjs
+scripts/cdp-*.cjs
+scripts/dump-*.cjs
+scripts/inspect-cdp.cjs
+scripts/kill-dsh.cjs
+scripts/launch-dsh*.cjs
+scripts/noop.cjs
+scripts/proc-cmd.cjs
+scripts/read-*.cjs
+scripts/sample-cpu*.cjs

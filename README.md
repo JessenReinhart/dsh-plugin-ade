@@ -17,7 +17,10 @@
 - **Glassmorphism & Motion Lab Compatible** — Preserves full backdrop-filter sampling across composers and slash command menus.
 - **Saved Layout Presets & Persistence** — Pin named multi-pane layouts in a new **Layouts** sidebar section above Workspaces. Tap one-click presets (**Side by Side**, **Stacked**, **Master + Stack**, **Quad Grid**), save the current split under a custom name, or delete saved layouts. The active tree auto-restores on restart. Auto-split Subagents can be switched ON/OFF here too.
 - **Live Agent Status Pills** — Each pane header shows a real-time **RUNNING** timer while the session is executing and an attention pulse for pending input, plus a **READY** completion pill when a reply is waiting.
-- **Subagent Stack Pane (NEW)** — Subagents no longer explode your workspace into `N` panes. The first child splits the parent once; every later child joins the same right-hand pane as a swipeable chip strip. The pane auto-follows the running child, clicks swap instantly without remounting, chips can pop into dedicated panes (up to 4 total), and completed children stay until dismissed.
+- **Subagent Stack Pane** — Subagents no longer explode your workspace into `N` panes. The first child splits the parent once; every later child joins the same right-hand pane as a swipeable chip strip. The pane auto-follows the running child, clicks swap instantly without remounting, chips can pop into dedicated panes (up to 4 total), and completed children stay until dismissed.
+- **Lineage Graph & Layout Scoping (NEW)** — Unreal Blueprint-style visual session and subagent graph canvas. Opening the graph from an active split or saved layout isolates nodes strictly to the layout's panes and their transitive subagents (`Layout Only`), with instant filtering across saved layout groups and `All`.
+- **Sidebar Subagent Hierarchy (NEW)** — Parent sessions in the sidebar display a toggle chevron to expand and inspect child subagent sessions inline.
+- **DSH Cookie Maintenance Scripts** — Includes `npm run check-cookies` and `npm run clean-cookies` to prevent DSH ephemeral port header overflow (`HTTP 431` "Web authentication failed").
 
 ---
 
