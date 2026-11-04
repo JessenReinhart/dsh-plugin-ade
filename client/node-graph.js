@@ -91,6 +91,16 @@ const BLUEPRINT_PALETTES = [
   },
 ];
 
+const BLUEPRINT_LAYOUT_PALETTE = {
+  id: 'layout-amber',
+  headerBg: 'rgba(146, 64, 14, 0.9)',
+  headerBorder: 'rgba(245, 158, 11, 0.55)',
+  boxBg: 'rgba(245, 158, 11, 0.08)',
+  boxBorder: 'rgba(245, 158, 11, 0.36)',
+  text: '#fde68a',
+  badgeBg: 'rgba(245, 158, 11, 0.22)',
+};
+
 function paletteForWorkspace(index) {
   return BLUEPRINT_PALETTES[Math.abs(index || 0) % BLUEPRINT_PALETTES.length];
 }
@@ -328,6 +338,8 @@ export function ADENodeGraphCanvas(props) {
     sessionsSnapshot,
     currentSessionId,
     layoutSessionIds,
+    activeLayout,
+    savedLayouts,
     onOpenSession,
     onSplitSession,
     onForkSession,
@@ -340,14 +352,57 @@ export function ADENodeGraphCanvas(props) {
   const layoutIds = Array.isArray(layoutSessionIds)
     ? layoutSessionIds.filter((id) => id && typeof id === 'string')
     : [];
-  const layoutIdSet = useMemo(() => new Set(layoutIds), [layoutIds.join('\u0000')]);
+  const layoutIdKey = layoutIds.join('\u0000');
+
+  const layoutFilters = useMemo(() => {
+    const list = [];
+    const saved = Array.isArray(savedLayouts) ? savedLayouts : [];
+
+    if (activeLayout && Array.isArray(activeLayout.paneIds) && activeLayout.paneIds.length >= 2) {
+      list.push({
+        id: 'layout',
+        label: activeLayout.name || `Layout ${activeLayout.paneIds.length}`,
+        title: 'Only sessions mounted in the active multi-pane layout plus their linked subagents and forks',
+        paneIds: activeLayout.paneIds.filter((id) => id && typeof id === 'string'),
+      });
+    } else if (layoutIds.length >= 2) {
+      list.push({
+        id: 'layout',
+        label: `Layout ${layoutIds.length}`,
+        title: 'Only sessions mounted in the active multi-pane layout plus their linked subagents and forks',
+        paneIds: layoutIds,
+      });
+    }
+
+    const activeKey = activeLayout ? activeLayout.id : 'layout';
+    const activePaneKey = activeLayout && Array.isArray(activeLayout.paneIds)
+      ? [...activeLayout.paneIds].sort().join('\u0000')
+      : (layoutIds.length >= 2 ? [...layoutIds].sort().join('\u0000') : '');
+
+    for (const saved of saved) {
+      const paneIds = Array.isArray(saved.panes)
+        ? saved.panes.map((p) => p && p.sessionId).filter((id) => id && typeof id === 'string')
+        : [];
+      if (paneIds.length < 2) continue;
+      const key = [...paneIds].sort().join('\u0000');
+      if (activePaneKey && key === activePaneKey) continue;
+      list.push({
+        id: `saved:${saved.id}`,
+        activeKey,
+        label: saved.name || `Layout ${paneIds.length}`,
+        title: `Saved layout: ${saved.name || paneIds.length + ' panes'}. Shows only these pane sessions plus their linked subagents and forks.`,
+        paneIds,
+      });
+    }
+    return list;
+  }, [activeLayout, layoutIdKey, savedLayouts]);
 
   const [savedPositions, setSavedPositions] = useState(() => getStoredPositions());
   const [transform, setTransform] = useState({ x: 50, y: 50, k: 0.88 });
   const [selectedNodeId, setSelectedNodeId] = useState(currentSessionId || null);
   const [expandedChatNodeIds, setExpandedChatNodeIds] = useState(() => new Set());
   const [closingChatNodeIds, setClosingChatNodeIds] = useState(() => new Set());
-  const [filterMode, setFilterMode] = useState(() => (layoutIds.length >= 2 ? 'layout' : 'all'));
+  const [filterMode, setFilterMode] = useState(() => (layoutFilters.length > 0 ? layoutFilters[0].id : 'all'));
   const [searchQuery, setSearchQuery] = useState('');
 
   const containerRef = useRef(null);
@@ -361,19 +416,27 @@ export function ADENodeGraphCanvas(props) {
     return extractLineageGraph(sessionsSnapshot, workspaceOf);
   }, [sessionsSnapshot, workspaceOf]);
 
-  const positions = useMemo(() => {
-    return computeGraphLayout(graphData.nodes, graphData.edges, graphData.workspaces, savedPositions);
-  }, [graphData.nodes, graphData.edges, graphData.workspaces, savedPositions]);
+  const currentFilterLayout = useMemo(() => {
+    return layoutFilters.find((f) => f.id === filterMode) || null;
+  }, [filterMode, layoutFilters]);
+
+  const activeLayoutPaneIds = useMemo(() => {
+    if (currentFilterLayout && Array.isArray(currentFilterLayout.paneIds)) return currentFilterLayout.paneIds;
+    if (filterMode === 'layout') return layoutIds;
+    return [];
+  }, [currentFilterLayout, filterMode, layoutIds]);
+
+  const activeLayoutPaneIdSet = useMemo(() => new Set(activeLayoutPaneIds), [activeLayoutPaneIds]);
 
   const layoutNodeIds = useMemo(() => {
-    if (layoutIdSet.size === 0) return layoutIdSet;
+    if (activeLayoutPaneIdSet.size === 0) return activeLayoutPaneIdSet;
     const childrenOf = new Map();
     for (const edge of graphData.edges) {
       if (!childrenOf.has(edge.from)) childrenOf.set(edge.from, []);
       childrenOf.get(edge.from).push(edge.to);
     }
-    const out = new Set(layoutIdSet);
-    const stack = [...layoutIdSet];
+    const out = new Set(activeLayoutPaneIdSet);
+    const stack = [...activeLayoutPaneIdSet];
     while (stack.length > 0) {
       const parentId = stack.pop();
       for (const childId of childrenOf.get(parentId) || []) {
@@ -383,15 +446,16 @@ export function ADENodeGraphCanvas(props) {
       }
     }
     return out;
-  }, [layoutIdSet, graphData.edges]);
+  }, [activeLayoutPaneIdSet, graphData.edges]);
+
+  const isLayoutFilter = Boolean(currentFilterLayout || (filterMode === 'layout' && activeLayoutPaneIds.length > 0));
 
   const visibleNodes = useMemo(() => {
-    const effectiveFilter = filterMode === 'layout' && layoutIds.length === 0 ? 'all' : filterMode;
     return graphData.nodes.filter((node) => {
-      if (effectiveFilter === 'running' && !node.running) return false;
-      if (effectiveFilter === 'subagents' && !node.isSubagent) return false;
-      if (effectiveFilter === 'forks' && !node.isFork) return false;
-      if (effectiveFilter === 'layout' && !layoutNodeIds.has(node.id)) return false;
+      if (filterMode === 'running' && !node.running) return false;
+      if (filterMode === 'subagents' && !node.isSubagent) return false;
+      if (filterMode === 'forks' && !node.isFork) return false;
+      if (isLayoutFilter && !layoutNodeIds.has(node.id)) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         return (
@@ -402,7 +466,7 @@ export function ADENodeGraphCanvas(props) {
       }
       return true;
     });
-  }, [graphData.nodes, filterMode, searchQuery, layoutNodeIds, layoutIds.length]);
+  }, [graphData.nodes, filterMode, searchQuery, isLayoutFilter, layoutNodeIds]);
 
   const visibleNodeIds = useMemo(() => new Set(visibleNodes.map((n) => n.id)), [visibleNodes]);
 
@@ -412,8 +476,65 @@ export function ADENodeGraphCanvas(props) {
     );
   }, [graphData.edges, visibleNodeIds]);
 
+  const effectiveWorkspaces = useMemo(() => {
+    if (isLayoutFilter) {
+      const title = currentFilterLayout ? currentFilterLayout.label : 'Layout';
+      return [
+        {
+          id: 'blueprint-layout',
+          title: currentFilterLayout ? currentFilterLayout.label : 'Layout',
+          path: `${activeLayoutPaneIds.length} Split Panes`,
+          palette: BLUEPRINT_LAYOUT_PALETTE,
+          nodeIds: new Set(visibleNodes.map((n) => n.id)),
+          isLayout: true,
+        },
+      ];
+    }
+    return graphData.workspaces;
+  }, [isLayoutFilter, currentFilterLayout, activeLayoutPaneIds.length, visibleNodes, graphData.workspaces]);
+
+  const positions = useMemo(() => {
+    return computeGraphLayout(graphData.nodes, graphData.edges, effectiveWorkspaces, savedPositions);
+  }, [graphData.nodes, graphData.edges, effectiveWorkspaces, savedPositions]);
+
   const workspaceBounds = useMemo(() => {
     const map = new Map();
+    if (isLayoutFilter) {
+      const memberNodes = visibleNodes;
+      if (memberNodes.length > 0) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const node of memberNodes) {
+          const pos = positions[node.id] || { x: 120, y: 120 };
+          const isExp = expandedChatNodeIds.has(node.id);
+          const w = isExp ? CARD_WIDTH_EXPANDED : CARD_WIDTH_COMPACT;
+          const h = isExp ? CARD_HEIGHT_EXPANDED : CARD_HEIGHT_COMPACT;
+          minX = Math.min(minX, pos.x);
+          minY = Math.min(minY, pos.y);
+          maxX = Math.max(maxX, pos.x + w);
+          maxY = Math.max(maxY, pos.y + h);
+        }
+        const padX = 36;
+        const padTop = 50;
+        const padBottom = 32;
+        const layoutTitle = currentFilterLayout ? currentFilterLayout.label : 'Layout';
+        map.set('blueprint-layout', {
+          ws: {
+            id: 'blueprint-layout',
+            title: layoutTitle,
+            path: `${activeLayoutPaneIds.length} Split Panes • ${memberNodes.length - activeLayoutPaneIds.length} Subagents`,
+            palette: BLUEPRINT_LAYOUT_PALETTE,
+            isLayout: true,
+          },
+          x: minX - padX,
+          y: minY - padTop,
+          width: Math.max((maxX - minX) + padX * 2, 340),
+          height: Math.max((maxY - minY) + padTop + padBottom, 200),
+          memberNodeIds: memberNodes.map((n) => n.id),
+        });
+        return map;
+      }
+    }
+
     for (const ws of graphData.workspaces) {
       const memberNodes = visibleNodes.filter((n) => n.workspaceId === ws.id);
       if (memberNodes.length === 0) continue;
@@ -444,7 +565,7 @@ export function ADENodeGraphCanvas(props) {
       });
     }
     return map;
-  }, [graphData.workspaces, visibleNodes, positions, expandedChatNodeIds]);
+  }, [isLayoutFilter, currentFilterLayout, activeLayoutPaneIds.length, visibleNodes, positions, expandedChatNodeIds, graphData.workspaces]);
 
   const handleToggleChatExpand = useCallback((nodeId) => {
     let isClosingNode = false;
@@ -719,8 +840,8 @@ export function ADENodeGraphCanvas(props) {
               fontVariantNumeric: 'tabular-nums',
             },
           },
-          filterMode === 'layout'
-            ? `${visibleNodes.length} nodes in layout • ${layoutIds.length} panes + ${Math.max(layoutNodeIds.size - layoutIds.length, 0)} linked branches`
+          isLayoutFilter
+            ? `${visibleNodes.length} nodes in layout • ${activeLayoutPaneIds.length} panes + ${Math.max(layoutNodeIds.size - activeLayoutPaneIds.length, 0)} linked branches`
             : `${visibleNodes.length} nodes • ${graphData.workspaces.length} workspace groups`
         )
       ),
@@ -728,7 +849,7 @@ export function ADENodeGraphCanvas(props) {
         'div',
         { style: { display: 'flex', alignItems: 'center', gap: 6 } },
         [
-          ...(layoutIds.length > 0 ? [{ id: 'layout', label: `Layout ${layoutIds.length}`, title: 'Only sessions mounted in the active multi-pane layout plus their linked subagents and forks' }] : []),
+          ...layoutFilters,
           { id: 'all', label: 'All' },
           { id: 'running', label: 'Running' },
           { id: 'subagents', label: 'Subagents' },
@@ -904,7 +1025,7 @@ export function ADENodeGraphCanvas(props) {
                     textOverflow: 'ellipsis',
                   },
                 },
-                `// Workspace: ${ws.title}`
+                ws.isLayout ? `// Layout: ${ws.title}` : `// Workspace: ${ws.title}`
               ),
               ws.path
                 ? React.createElement(
@@ -1127,10 +1248,15 @@ export function ADENodeGraphCanvas(props) {
           badgeFg = 'oklch(0.75 0.18 300)';
           badgeText = 'FORK';
         }
-        if (layoutIdSet.has(node.id)) {
-          badgeBg = 'oklch(0.26 0.07 85 / 0.5)';
-          badgeFg = 'oklch(0.82 0.13 85)';
-          badgeText = node.isSubagent ? 'PANE · SUBAGENT' : node.isFork ? 'PANE · FORK' : 'PANE';
+        if (activeLayoutPaneIdSet.has(node.id)) {
+          badgeBg = 'oklch(0.26 0.07 85 / 0.55)';
+          badgeFg = 'oklch(0.85 0.16 85)';
+          const isSaved = Boolean(currentFilterLayout && currentFilterLayout.id.startsWith('saved:'));
+          badgeText = node.isSubagent
+            ? (isSaved ? 'SAVED · SUBAGENT' : 'PANE · SUBAGENT')
+            : node.isFork
+            ? (isSaved ? 'SAVED · FORK' : 'PANE · FORK')
+            : (isSaved ? 'SAVED PANE' : 'PANE');
         }
 
         const sessionRef = isExpanded && ensureReference ? ensureReference(node.id) : null;

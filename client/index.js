@@ -51,6 +51,39 @@ let state = {
   panes: [],  // [{ sessionId }] - stable mount order
 };
 let splitStartMs = 0;
+let lastSplitPaneIds = [];
+let pendingGraphLayoutIds = null;
+
+let activeLayoutContext = {
+  id: null,
+  name: null,
+  isCustom: false,
+  paneIds: [],
+  tree: null,
+};
+const layoutInfoListeners = new Set();
+function emitLayoutInfo() {
+  for (const fn of layoutInfoListeners) {
+    try { fn(); } catch (_) {}
+  }
+}
+function subscribeLayoutInfo(fn) {
+  layoutInfoListeners.add(fn);
+  return () => layoutInfoListeners.delete(fn);
+}
+function getActiveLayoutInfo() {
+  return activeLayoutContext;
+}
+function setActiveLayoutInfo(info) {
+  activeLayoutContext = {
+    id: (info && info.id) || null,
+    name: (info && info.name) || null,
+    isCustom: Boolean(info && info.isCustom),
+    paneIds: Array.isArray(info && info.paneIds) ? info.paneIds : [],
+    tree: (info && info.tree) || null,
+  };
+  emitLayoutInfo();
+}
 const listeners = new Set();
 const emit = () => { for (const l of listeners) l(); };
 const getState = () => state;
@@ -224,6 +257,13 @@ function saveCustomLayout(name, tree, panes) {
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(SAVED_LAYOUTS_KEY, JSON.stringify(list));
     }
+    setActiveLayoutInfo({
+      id: newLayout.id,
+      name: newLayout.name,
+      isCustom: true,
+      paneIds: getTreePaneIds(tree ? tree.root : null),
+      tree,
+    });
     emitLayoutsChange();
     return newLayout;
   } catch (_) {
@@ -728,13 +768,37 @@ function ADENodeGraphViewWrapper(props) {
   const sessionId = props && props.sessionId ? props.sessionId : currentMainSessionId();
   const sessionsSnapshot = useSyncExternalStore(subscribeSubagent, () => readSessionsSnapshot());
   const layoutPanesSnapshot = useSyncExternalStore(subscribe, getState);
-  const layoutSessionIds = React.useMemo(() => {
+  const layoutInfoSnapshot = useSyncExternalStore(subscribeLayoutInfo, getActiveLayoutInfo);
+  const savedLayoutsSnapshot = useSyncExternalStore(subscribeLayouts, getLayoutsSnapshot);
+  const savedLayouts = (savedLayoutsSnapshot && savedLayoutsSnapshot.customLayouts) || [];
+
+  const currentTreeIds = React.useMemo(() => {
     const tree = layoutPanesSnapshot && layoutPanesSnapshot.tree;
     const panes = layoutPanesSnapshot && layoutPanesSnapshot.panes;
     if (tree) return getTreePaneIds(tree.root);
     if (panes && panes.length > 0) return panes.map((pane) => pane.sessionId).filter(Boolean);
     return [];
   }, [layoutPanesSnapshot]);
+
+  const layoutSessionIds = React.useMemo(() => {
+    if (layoutInfoSnapshot && Array.isArray(layoutInfoSnapshot.paneIds) && layoutInfoSnapshot.paneIds.length >= 2) {
+      return layoutInfoSnapshot.paneIds;
+    }
+    if (currentTreeIds.length >= 2) return currentTreeIds;
+    if (pendingGraphLayoutIds && pendingGraphLayoutIds.length >= 2) return pendingGraphLayoutIds;
+    if (lastSplitPaneIds && lastSplitPaneIds.length >= 2) return lastSplitPaneIds;
+    return [];
+  }, [layoutInfoSnapshot, currentTreeIds]);
+
+  const activeLayout = (layoutInfoSnapshot && Array.isArray(layoutInfoSnapshot.paneIds) && layoutInfoSnapshot.paneIds.length >= 2)
+    ? {
+        key: 'layout',
+        id: layoutInfoSnapshot.id,
+        name: layoutInfoSnapshot.name || `Split Layout (${layoutInfoSnapshot.paneIds.length} panes)`,
+        isCustom: Boolean(layoutInfoSnapshot.isCustom),
+        paneIds: layoutInfoSnapshot.paneIds,
+      }
+    : null;
 
   const onOpenSession = (id) => {
     if (!id) return;
@@ -794,6 +858,8 @@ function ADENodeGraphViewWrapper(props) {
     sessionsSnapshot,
     currentSessionId: sessionId,
     layoutSessionIds,
+    activeLayout,
+    savedLayouts,
     onOpenSession,
     onSplitSession,
     onForkSession,
@@ -877,7 +943,7 @@ function disposeAlias() {
   aliasDispose = null;
 }
 
-function activateSplitWithTree(tree) {
+function activateSplitWithTree(tree, meta = null) {
   const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
   splitStartMs = t0;
   refreshHandles();
@@ -889,6 +955,28 @@ function activateSplitWithTree(tree) {
   const ids = getTreePaneIds(tree ? tree.root : null);
   for (const id of ids) {
     try { ensureReference(id); } catch (_) {}
+  }
+
+  if (ids.length >= 2) {
+    lastSplitPaneIds = ids;
+    if (meta && meta.name) {
+      setActiveLayoutInfo({
+        id: meta.id || 'custom-' + Date.now(),
+        name: meta.name,
+        isCustom: Boolean(meta.isCustom),
+        paneIds: ids,
+        tree,
+      });
+    } else {
+      const isSameCustom = activeLayoutContext.isCustom && activeLayoutContext.paneIds.join(',') === ids.join(',');
+      setActiveLayoutInfo({
+        id: isSameCustom ? activeLayoutContext.id : 'split-' + ids.length,
+        name: isSameCustom ? activeLayoutContext.name : `Split Layout (${ids.length} panes)`,
+        isCustom: isSameCustom,
+        paneIds: ids,
+        tree,
+      });
+    }
   }
 
   try {
@@ -918,6 +1006,10 @@ function activateSplit(paneIds) {
 
 function deactivateSplit(remainingSessionId) {
   for (const id of [...retained.keys()]) releaseReference(id);
+  activeLayoutContext = { id: null, name: null, isCustom: false, paneIds: [], tree: null };
+  emitLayoutInfo();
+  pendingGraphLayoutIds = null;
+  lastSplitPaneIds = [];
   state = { tree: null, panes: [] };
   emit();
   persistActiveState();
@@ -1685,7 +1777,13 @@ function reconcileLayoutTree(tree) {
 function applyCustomLayout(layout) {
   if (!layout || !layout.tree) return;
   const restoredTree = reconcileLayoutTree(layout.tree);
-  if (restoredTree) activateSplitWithTree(restoredTree);
+  if (restoredTree) {
+    activateSplitWithTree(restoredTree, {
+      id: layout.id,
+      name: layout.name,
+      isCustom: true,
+    });
+  }
 }
 
 function restorePersistedSplit() {
@@ -2021,6 +2119,11 @@ function ADELayoutsSection(props) {
             onClick: (e) => {
               e.stopPropagation();
               try {
+                const tree = snap && snap.tree ? snap.tree : null;
+                const ids = getTreePaneIds(tree ? tree.root : null);
+                if (ids.length >= 2) {
+                  pendingGraphLayoutIds = ids;
+                }
                 if (app && app.layout && typeof app.layout.selectPanel === 'function') {
                   app.layout.selectPanel('ade-node-graph');
                 }
@@ -2233,6 +2336,44 @@ function ADELayoutsSection(props) {
                         },
                       },
                       `${paneCount}P`
+                    ),
+                    React.createElement(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'ade-graph-btn',
+                        title: `Open lineage graph for "${layout.name}"`,
+                        onClick: (e) => {
+                          e.stopPropagation();
+                          const paneIds = (layout.panes || []).map((p) => p.sessionId).filter(Boolean);
+                          setActiveLayoutInfo({
+                            id: layout.id,
+                            name: layout.name,
+                            isCustom: true,
+                            paneIds,
+                            tree: layout.tree,
+                          });
+                          pendingGraphLayoutIds = paneIds;
+                          try {
+                            if (app && app.layout && typeof app.layout.selectPanel === 'function') {
+                              app.layout.selectPanel('ade-node-graph');
+                            }
+                          } catch (_) {}
+                        },
+                        style: {
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--dsw-alias-label-tertiary, rgba(255, 255, 255, 0.4))',
+                          cursor: 'pointer',
+                          padding: '2px 4px',
+                          borderRadius: 3,
+                          fontSize: 11,
+                          lineHeight: 1,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                        },
+                      },
+                      adeIcon('graph', 11)
                     ),
                     React.createElement(
                       'button',
@@ -3935,6 +4076,7 @@ export function apply(ctx) {
       const nowInConversation = isConversationPanel(panelId);
       if (lastInConversation && !nowInConversation && state.panes.length) {
         savedSplitBeforeLeaving = state.tree;
+        pendingGraphLayoutIds = getTreePaneIds(state.tree ? state.tree.root : null);
         for (const id of [...retained.keys()]) releaseReference(id);
         state = { tree: null, panes: [] };
         emit();
