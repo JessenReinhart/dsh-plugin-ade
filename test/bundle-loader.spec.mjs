@@ -21,11 +21,18 @@ describe('Client Bundle Loader & Execution', () => {
     const code = readFileSync(bundlePath, 'utf8');
     const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 
-    const loadCalls = [...code.matchAll(/window\.__ModuleLoader__\.load\(\s*\{([^}]+)\}\s*\)/g)];
+    const loadCalls = [...code.matchAll(/window\.__ModuleLoader__\.load\(\s*\{/g)];
     assert.strictEqual(loadCalls.length, 1, 'Must call __ModuleLoader__.load exactly once to prevent freeze');
 
+    // The wrapper must not ALSO attach a CommonJS `module.exports = factory(...)`
+    // branch. In the renderer both branches run, so the factory executes twice.
+    assert.ok(
+      !/module\.exports\s*=\s*factory\s*\(/.test(code),
+      'Wrapper must not contain a CommonJS module.exports = factory() fallback'
+    );
+
     // Verify registered ID matches package.json name exactly
-    const idMatch = loadCalls[0][1].match(/id:\s*["']([^"']+)["']/);
+    const idMatch = code.match(/window\.__ModuleLoader__\.load\(\s*\{[\s\S]*?id:\s*["']([^"']+)["']/);
     assert.ok(idMatch, 'Module id must be specified in load call');
     assert.strictEqual(idMatch[1], pkg.name, 'Module id must match package.json name');
 

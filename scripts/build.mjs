@@ -47,21 +47,19 @@ async function build() {
 
   const rawCode = clientBuild.outputFiles[0].text;
 
-  // Wrap in DSH __ModuleLoader__.load wrapper matching native DSH UI plugins
-  const wrapped = `(function() {
-  function factory(require) {
+  // Wrap like native DSH UI plugins: only register through
+  // window.__ModuleLoader__.load. No CommonJS `module.exports` fallback,
+  // because in the renderer both branches execute and run the factory twice,
+  // triggering duplicate registration / freezes.
+  const wrapped = `window.__ModuleLoader__.load({
+  id: "@community/dsh-plugin-ade",
+  factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;
     ${rawCode}
     return module.exports;
   }
-  if (typeof window !== 'undefined' && window.__ModuleLoader__ && typeof window.__ModuleLoader__.load === 'function') {
-    window.__ModuleLoader__.load({ id: "@community/dsh-plugin-ade", factory: factory });
-  }
-  if (typeof module !== 'undefined' && module.exports) {
-    module.exports = factory(typeof require === 'function' ? require : function() { return {}; });
-  }
-})();
+});
 `;
 
   writeFileSync(resolve(root, 'dist/client/index.js'), wrapped, 'utf8');

@@ -4072,7 +4072,7 @@ export function apply(ctx) {
   let savedSplitBeforeLeaving = null;
   if (layoutSnapshot) {
     const reconcile = () => {
-      const panelId = layoutSnapshot.getSnapshot().activePanelId;
+      const panelId = layoutSnapshot.getSnapshot?.()?.activePanelId;
       const nowInConversation = isConversationPanel(panelId);
       if (lastInConversation && !nowInConversation && state.panes.length) {
         savedSplitBeforeLeaving = state.tree;

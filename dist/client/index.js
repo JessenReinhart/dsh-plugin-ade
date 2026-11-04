@@ -1,5 +1,6 @@
-(function() {
-  function factory(require) {
+window.__ModuleLoader__.load({
+  id: "@community/dsh-plugin-ade",
+  factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;
     "use strict";
@@ -5731,7 +5732,7 @@ function apply(ctx) {
   let savedSplitBeforeLeaving = null;
   if (layoutSnapshot) {
     const reconcile = () => {
-      const panelId = layoutSnapshot.getSnapshot().activePanelId;
+      const panelId = layoutSnapshot.getSnapshot?.()?.activePanelId;
       const nowInConversation = isConversationPanel(panelId);
       if (lastInConversation && !nowInConversation && state.panes.length) {
         savedSplitBeforeLeaving = state.tree;
@@ -5795,10 +5796,4 @@ var inject = [
 
     return module.exports;
   }
-  if (typeof window !== 'undefined' && window.__ModuleLoader__ && typeof window.__ModuleLoader__.load === 'function') {
-    window.__ModuleLoader__.load({ id: "@community/dsh-plugin-ade", factory: factory });
-  }
-  if (typeof module !== 'undefined' && module.exports) {
-    module.exports = factory(typeof require === 'function' ? require : function() { return {}; });
-  }
-})();
+});
