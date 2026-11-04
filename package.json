@@ -24,7 +24,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "preinstall": "node scripts/build.mjs",
-    "test": "node --test src/layout/engine.spec.ts"
+    "test": "node --test src/layout/engine.spec.ts test/bundle-loader.spec.mjs test/static-analysis.spec.mjs test/node-graph-filter.spec.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.5"
