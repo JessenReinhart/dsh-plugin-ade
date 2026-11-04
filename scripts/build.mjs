@@ -57,7 +57,6 @@ async function build() {
   }
   if (typeof window !== 'undefined' && window.__ModuleLoader__ && typeof window.__ModuleLoader__.load === 'function') {
     window.__ModuleLoader__.load({ id: "@community/dsh-plugin-ade", factory: factory });
-    window.__ModuleLoader__.load({ id: "community-ade", factory: factory });
   }
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = factory(typeof require === 'function' ? require : function() { return {}; });

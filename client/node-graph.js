@@ -356,7 +356,7 @@ export function ADENodeGraphCanvas(props) {
 
   const layoutFilters = useMemo(() => {
     const list = [];
-    const saved = Array.isArray(savedLayouts) ? savedLayouts : [];
+    const savedLayoutList = Array.isArray(savedLayouts) ? savedLayouts : [];
 
     if (activeLayout && Array.isArray(activeLayout.paneIds) && activeLayout.paneIds.length >= 2) {
       list.push({
@@ -379,18 +379,18 @@ export function ADENodeGraphCanvas(props) {
       ? [...activeLayout.paneIds].sort().join('\u0000')
       : (layoutIds.length >= 2 ? [...layoutIds].sort().join('\u0000') : '');
 
-    for (const saved of saved) {
-      const paneIds = Array.isArray(saved.panes)
-        ? saved.panes.map((p) => p && p.sessionId).filter((id) => id && typeof id === 'string')
+    for (const savedLayout of savedLayoutList) {
+      const paneIds = Array.isArray(savedLayout.panes)
+        ? savedLayout.panes.map((p) => p && p.sessionId).filter((id) => id && typeof id === 'string')
         : [];
       if (paneIds.length < 2) continue;
       const key = [...paneIds].sort().join('\u0000');
       if (activePaneKey && key === activePaneKey) continue;
       list.push({
-        id: `saved:${saved.id}`,
+        id: `saved:${savedLayout.id}`,
         activeKey,
-        label: saved.name || `Layout ${paneIds.length}`,
-        title: `Saved layout: ${saved.name || paneIds.length + ' panes'}. Shows only these pane sessions plus their linked subagents and forks.`,
+        label: savedLayout.name || `Layout ${paneIds.length}`,
+        title: `Saved layout: ${savedLayout.name || paneIds.length + ' panes'}. Shows only these pane sessions plus their linked subagents and forks.`,
         paneIds,
       });
     }

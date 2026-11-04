@@ -336,7 +336,7 @@ function ADENodeGraphCanvas(props) {
   const layoutIdKey = layoutIds.join("\0");
   const layoutFilters = (0, import_react.useMemo)(() => {
     const list = [];
-    const saved = Array.isArray(savedLayouts) ? savedLayouts : [];
+    const savedLayoutList = Array.isArray(savedLayouts) ? savedLayouts : [];
     if (activeLayout && Array.isArray(activeLayout.paneIds) && activeLayout.paneIds.length >= 2) {
       list.push({
         id: "layout",
@@ -354,16 +354,16 @@ function ADENodeGraphCanvas(props) {
     }
     const activeKey = activeLayout ? activeLayout.id : "layout";
     const activePaneKey = activeLayout && Array.isArray(activeLayout.paneIds) ? [...activeLayout.paneIds].sort().join("\0") : layoutIds.length >= 2 ? [...layoutIds].sort().join("\0") : "";
-    for (const saved2 of saved2) {
-      const paneIds = Array.isArray(saved2.panes) ? saved2.panes.map((p) => p && p.sessionId).filter((id) => id && typeof id === "string") : [];
+    for (const savedLayout of savedLayoutList) {
+      const paneIds = Array.isArray(savedLayout.panes) ? savedLayout.panes.map((p) => p && p.sessionId).filter((id) => id && typeof id === "string") : [];
       if (paneIds.length < 2) continue;
       const key = [...paneIds].sort().join("\0");
       if (activePaneKey && key === activePaneKey) continue;
       list.push({
-        id: `saved:${saved2.id}`,
+        id: `saved:${savedLayout.id}`,
         activeKey,
-        label: saved2.name || `Layout ${paneIds.length}`,
-        title: `Saved layout: ${saved2.name || paneIds.length + " panes"}. Shows only these pane sessions plus their linked subagents and forks.`,
+        label: savedLayout.name || `Layout ${paneIds.length}`,
+        title: `Saved layout: ${savedLayout.name || paneIds.length + " panes"}. Shows only these pane sessions plus their linked subagents and forks.`,
         paneIds
       });
     }
@@ -5797,7 +5797,6 @@ var inject = [
   }
   if (typeof window !== 'undefined' && window.__ModuleLoader__ && typeof window.__ModuleLoader__.load === 'function') {
     window.__ModuleLoader__.load({ id: "@community/dsh-plugin-ade", factory: factory });
-    window.__ModuleLoader__.load({ id: "community-ade", factory: factory });
   }
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = factory(typeof require === 'function' ? require : function() { return {}; });
